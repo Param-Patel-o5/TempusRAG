@@ -1,7 +1,7 @@
-"""Environment configuration and shared constants — single source of truth for all tunable parameters.
+"""Environment configuration and shared constants: single source of truth for all tunable parameters.
 
 Every other module in src/ imports from this file to ensure consistency across the pipeline.
-No logic, no I/O beyond loading .env — pure constants and a single utility function.
+No logic, no I/O beyond loading .env: pure constants and a single utility function.
 """
 
 import os
@@ -13,35 +13,52 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================================
-# API KEYS AND EXTERNAL SERVICE CONFIG
+# PROJECT ROOT AND DIRECTORY PATHS
 # ============================================================================
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-"""Google Generative AI (Gemini 1.5 Flash) API key for promise extraction."""
+# Project root directory (parent of src/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-"""Groq API key for Llama 3.1 70B judge model."""
+CHROMADB_PATH = Path(os.getenv("CHROMADB_PATH", str(PROJECT_ROOT / "chroma_store"))).resolve()
+"""Persistent ChromaDB storage directory (one collection per ticker), absolute path."""
 
-SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "")
-"""User-Agent header for SEC EDGAR requests. Required by SEC policy."""
+DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data" / "filings"))).resolve()
+"""Cached SEC 10-K filings stored as plaintext (ticker_year.txt format), absolute path."""
 
-# ============================================================================
-# DIRECTORY PATHS (as Path objects for pathlib operations)
-# ============================================================================
-
-CHROMADB_PATH = Path(os.getenv("CHROMADB_PATH", "./chroma_store"))
-"""Persistent ChromaDB storage directory (one collection per ticker)."""
-
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data/filings"))
-"""Cached SEC 10-K filings stored as plaintext (ticker_year.txt format)."""
-
-LOG_DIR = Path(os.getenv("LOG_DIR", "./logs"))
-"""Application log files directory."""
+LOG_DIR = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs"))).resolve()
+"""Application log files directory, absolute path."""
 
 # Ensure all directories exist
 CHROMADB_PATH.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# ============================================================================
+# YEAR CONVENTION
+# ============================================================================
+
+YEAR_CONVENTION = "fiscal_year"
+"""Single year convention across TempusRAG: fiscal year (period-of-report end year).
+
+All SEC 10-K filings are identified by the fiscal year of the reported period,
+not the calendar filing date. For example, a 10-K filed in February 2026 covering
+the period ending December 31, 2025 is tagged with year=2025 and saved as
+HIG_2025.txt. This convention is consistently used in chunker prefixes, extractor
+prompts, collection metadata, and recency weight calculations.
+"""
+
+# ============================================================================
+# API KEYS AND EXTERNAL SERVICE CONFIG
+# ============================================================================
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+"""Google Generative AI API key for promise extraction and embeddings."""
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+"""Groq API key for judge model."""
+
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "")
+"""User-Agent header for SEC EDGAR requests. Required by SEC policy."""
 
 # ============================================================================
 # CACHE AND STALENESS CONFIG
@@ -55,20 +72,40 @@ CACHE_STALENESS_DAYS = int(os.getenv("CACHE_STALENESS_DAYS", "180"))
 # ============================================================================
 
 CHUNK_MAX_TOKENS = 500
-"""Maximum tokens per chunk after splitting; enforced by chunker.py."""
+"""Maximum words per chunk after splitting; enforced by chunker.py.
+
+Set to 500 words (~650 to 750 subword tokens in standard English).
+Table token risk: SEC 10-K filings contain extensive unpunctuated financial tables,
+XBRL snippets, and numerical schedules. Table text has a much higher token-to-word
+ratio (often 1.5 to 2.5x) due to isolated digits, delimiters, and symbols.
+Setting the maximum chunk size to 500 words provides a robust safety margin,
+preventing table chunks from overflowing the Gemini embedding 2,048-token limit
+while leaving ample room for prepended contextual prefixes.
+Treated as words (len(text.split())), not raw subword tokens.
+"""
 
 CHUNK_OVERLAP_TOKENS = 50
-"""Overlap between consecutive chunks to preserve context bridges."""
+"""Overlap in words between consecutive chunks to preserve context bridges."""
 
 # ============================================================================
 # EMBEDDING PARAMETERS
 # ============================================================================
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-"""Sentence-Transformers model for dense embeddings (384-dimensional)."""
+"""Local lightweight sentence-transformers model for dense embeddings (384-dimensional).
+
+Runs offline on CPU in seconds with zero API rate limits or network latency.
+"""
 
 EMBEDDING_DIMENSIONS = 384
-"""Output dimensionality of the embedding model."""
+"""Output dimensionality of the all-MiniLM-L6-v2 embedding model (384)."""
+
+EMBEDDING_DISTANCE_SPACE = "cosine"
+"""Distance metric for ChromaDB collections: 'cosine', 'l2', or 'ip'.
+
+When set to 'cosine', Chroma computes cosine distance: d = 1 - cosine_similarity.
+Vectors produced are L2-normalized prior to storage.
+"""
 
 # ============================================================================
 # RETRIEVAL PARAMETERS (hybrid search + RRF fusion)
@@ -91,14 +128,17 @@ FINAL_TOP_N = 5
 # ============================================================================
 
 SECTION_BOOST_WEIGHTS = {
-    "Future Outlook": 1.3,
-    "MD&A": 1.2,
-    "Financial Results": 1.0,
-    "Risk Factors": 0.8,
+    # Keys are matched as case-insensitive substrings against chunk.section.
+    # Real section labels from EDGAR look like: "Item 7. Management's Discussion..."
+    # so we use the Item-number prefix as the key.
+    "Item 7":  1.3,   # MD&A: most promise-rich section
+    "Item 1.": 1.2,   # Business section: strategy / segment descriptions
+    "Item 1A": 0.7,   # Risk Factors: informative but not promise-bearing
+    "Item 8":  0.7,   # Financial Statements: numbers, not forward commitments
 }
-"""
-Multipliers applied to relevance scores based on section source.
-Sections in Future Outlook are more likely to contain promises.
+"""Multipliers applied to relevance scores based on section source.
+
+Sections in Future Outlook / MD&A are more likely to contain commitments.
 Sections outside this dict fall back to DEFAULT_SECTION_BOOST.
 """
 
@@ -110,11 +150,13 @@ DEFAULT_SECTION_BOOST = 1.0
 # ============================================================================
 
 SIMILARITY_STRONG_EVIDENCE = 0.7
-"""Similarity ≥ this threshold → strong evidence for delivery."""
+"""Cosine similarity >= this threshold indicates strong evidence for delivery."""
 
 SIMILARITY_WEAK_EVIDENCE = 0.5
-"""Similarity in range [WEAK, STRONG) → weak or partial evidence.
-Similarity < this threshold → absent, candidate for Silently Abandoned.
+"""Cosine similarity in range [WEAK, STRONG) indicates weak or partial evidence.
+
+Cosine similarity < this threshold indicates absent evidence, candidate for Silently Abandoned.
+In cosine distance space, similarity = 1.0 - distance for L2-normalized vectors.
 """
 
 # ============================================================================
@@ -122,18 +164,32 @@ Similarity < this threshold → absent, candidate for Silently Abandoned.
 # ============================================================================
 
 PROMISE_EXTRACTION_SECTIONS = [
-    "MD&A", 
-    "management", 
-    "discussion", 
-    "outlook", 
-    "future", 
-    "growth", 
-    "strategy"
+    "Item 7",          # MD&A body (matches "Item 7. Management's Discussion...")
+    "Item 1.",         # Business section: strategy / segment descriptions
+    "MD&A",            # direct label fallback
+    "management's discussion",  # plain-text variant
+    "outlook",         # future-outlook subsections
+    "strategy",        # strategy subsections
+    "growth",          # growth/expansion subsections
 ]
-"""Keyword patterns for substring matching in section names (case-insensitive)."""
+"""Keyword patterns for substring matching in section names (case-insensitive).
 
-EVIDENCE_SEARCH_SECTIONS = ["MD&A", "Financial Results", "Claims Operations"]
-"""Sections searched for evidence of promise fulfillment (LLM Call 2, Groq)."""
+Deliberately excludes 'management' as a bare word (which matches Item 12
+'Security Ownership of Certain Beneficial Owners and Management...').
+Also excludes 'discussion' alone (too broad).
+
+Chunks that match these inclusion filters are kept. The separate exclusion list
+in extractor._EXCLUDED_SECTION_KEYWORDS is applied only to cue-phrase fallback
+candidates (chunks outside the primary sections) to prevent non-commitment sections
+like exhibits or legal proceedings from entering the fallback set.
+"""
+
+EVIDENCE_SEARCH_SECTIONS = ["Item 7", "Item 1.", "Item 8"]
+"""Canonical sections examined for evidence of promise delivery.
+
+Consistent with real EDGAR Item headings: Item 7 (MD&A), Item 1 (Business),
+and Item 8 (Financial Statements).
+"""
 
 # ============================================================================
 # RECENCY WEIGHTS FOR CREDIBILITY SCORING
@@ -141,8 +197,7 @@ EVIDENCE_SEARCH_SECTIONS = ["MD&A", "Financial Results", "Claims Operations"]
 
 
 def recency_weight(year: int, most_recent_year: int) -> float:
-    """
-    Returns recency weight for a given fiscal year relative to the most recent year analyzed.
+    """Returns recency weight for a given fiscal year relative to the most recent year analyzed.
 
     Most recent year = 1.0, each year back decreases by 0.1, floor at 0.6.
     Matches documented mapping:
@@ -174,10 +229,10 @@ CONFIDENCE_SIGNAL_WEIGHTS = {
     "has_commitment_verb": 0.2,
     "domain_detectable": 0.2,
 }
-"""
-Weights for signals used to compute confidence_score on extracted promises.
-Sum of all weights should equal 1.0.
-Used by scorer.py to assign confidence_score (0.0-1.0) before LLM judge.
+"""Weights for signals used to compute confidence_score on extracted promises.
+
+Sum of all weights equals 1.0.
+Used by scorer.py to assign confidence_score (0.0 to 1.0) before LLM judge.
 """
 
 # ============================================================================
@@ -189,8 +244,8 @@ JUDGE_ANCHORS = """90-100: Explicit delivery with matching metrics
 50-69:  Topic mentioned, no clear confirmation
 30-49:  Contradicted or shortfall shown
 0-29:   No evidence or explicit failure""".strip()
-"""
-Scoring rubric for Groq Llama judge (reasoner.py, LLM Call 2).
+"""Scoring rubric for Groq judge (reasoner.py, LLM Call 2).
+
 Embedded directly into judge prompts to ground delivery_score (0-100).
 """
 
@@ -198,37 +253,54 @@ Embedded directly into judge prompts to ground delivery_score (0-100).
 # LLM MODEL IDENTIFIERS
 # ============================================================================
 
-EXTRACTOR_MODEL = "gemini-3.6-flash"
-"""Google Generative AI model for LLM Call 1 (promise extraction)."""
+EXTRACTOR_MODEL = os.getenv("EXTRACTOR_MODEL", "gemini-3.5-flash-lite")
+"""Google Generative AI model for LLM Call 1 (promise extraction). 15 RPM, 500 RPD."""
 
-JUDGE_MODEL = "groq/compound"
-"""Groq model identifier for LLM Call 2 (cross-year reasoning + scoring).
-Updated to use groq/compound (Groq's router model) instead of decommissioned llama-3.1-70b-versatile."""
+EXTRACTOR_FALLBACK_MODEL = os.getenv("EXTRACTOR_FALLBACK_MODEL", "gemini-3.5")
+"""Fallback Gemini model if primary model experiences 503 high-demand spikes or deprecation."""
+
+JUDGE_MODEL = os.getenv("GROQ_MODEL", os.getenv("JUDGE_MODEL", "openai/gpt-oss-20b"))
+"""Groq model identifier for LLM Call 2 (cross-year reasoning and scoring)."""
+
+GROQ_MODEL = JUDGE_MODEL
+"""Alias for JUDGE_MODEL to support GROQ_MODEL environment variable or direct config imports."""
+
+MAX_JUDGE_EVIDENCE_CHUNKS = int(os.getenv("MAX_JUDGE_EVIDENCE_CHUNKS", "3"))
+"""Maximum total evidence chunks sent to Groq judge."""
+
+MAX_JUDGE_CHUNK_WORDS = int(os.getenv("MAX_JUDGE_CHUNK_WORDS", "300"))
+"""Maximum words per evidence chunk passed to Groq judge prompt."""
 
 # ============================================================================
-# RATE LIMITING AND RETRY CONFIG
+# RATE LIMITING AND PROVIDER QUOTAS
 # ============================================================================
 
 SEC_MIN_REQUEST_INTERVAL = 0.11
 """Minimum seconds between SEC EDGAR requests (stay well under 10 req/sec limit)."""
 
-# Gemini API rate limiting (for promise extraction)
-GEMINI_REQUESTS_PER_MINUTE = 15
-"""Maximum requests per minute for Gemini API to avoid 429 errors."""
+# Provider quotas: verified on 2026-09-19 from Google AI Studio and Groq Console docs.
+# Configurable via environment variables.
 
-GEMINI_REQUEST_INTERVAL = 60.0 / GEMINI_REQUESTS_PER_MINUTE
-"""Minimum seconds between Gemini API calls."""
+# 1. Google Gemini Generation (Promise Extractor)
+# Verified from user Google AI Studio table: Gemini 3.5 Flash Lite is 15 RPM, 500 RPD.
+GEMINI_GENERATE_RPM = int(os.getenv("GEMINI_GENERATE_RPM", "15"))
+GEMINI_GENERATE_RPD = int(os.getenv("GEMINI_GENERATE_RPD", "500"))
 
-# Groq API rate limiting (for promise judging) - more conservative after testing
-GROQ_REQUESTS_PER_MINUTE = 10
-"""Maximum requests per minute for Groq API to avoid 429 errors (reduced after testing)."""
 
-GROQ_REQUEST_INTERVAL = 60.0 / GROQ_REQUESTS_PER_MINUTE
-"""Minimum seconds between Groq API calls (6 seconds)."""
+# 3. Groq (Cross-Year Judge: openai/gpt-oss-20b: 30 RPM, 1000 RPD, 8K TPM)
+GROQ_RPM = int(os.getenv("GROQ_RPM", "30"))
+GROQ_RPD = int(os.getenv("GROQ_RPD", "1000"))
 
-# Retry configuration for both APIs
+GROQ_REQUEST_INTERVAL = 3.0
+"""Minimum interval in seconds between Groq requests for pacing."""
+
+# Circuit breaker auto-reset cooldown
+CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "1800"))
+"""Circuit breaker auto-reset cooldown in seconds (default: 1800s / 30 minutes)."""
+
+# Retry configuration for APIs
 MAX_RETRIES = 3
-"""Maximum number of retries for failed API calls."""
+"""Maximum number of retries for transient API errors."""
 
 RETRY_BASE_DELAY = 1.0
 """Base delay in seconds for exponential backoff retry."""
@@ -249,7 +321,10 @@ RETRY_MAX_DELAY = 60.0
 if __name__ == "__main__":
     print("=== TempusRAG Configuration ===\n")
 
-    print("Directories:")
+    print(f"Year Convention: {YEAR_CONVENTION}")
+    print(f"Project Root: {PROJECT_ROOT}")
+
+    print("\nDirectories:")
     print(f"  CHROMADB_PATH: {CHROMADB_PATH}")
     print(f"  DATA_DIR: {DATA_DIR}")
     print(f"  LOG_DIR: {LOG_DIR}")
@@ -261,6 +336,7 @@ if __name__ == "__main__":
     print("\nEmbeddings:")
     print(f"  EMBEDDING_MODEL_NAME: {EMBEDDING_MODEL_NAME}")
     print(f"  EMBEDDING_DIMENSIONS: {EMBEDDING_DIMENSIONS}")
+    print(f"  EMBEDDING_DISTANCE_SPACE: {EMBEDDING_DISTANCE_SPACE}")
 
     print("\nRetrieval:")
     print(f"  DENSE_TOP_K: {DENSE_TOP_K}")
@@ -293,10 +369,17 @@ if __name__ == "__main__":
         print(f"  {signal}: {weight}")
 
     print("\nLLM Models:")
-    print(f"  EXTRACTOR_MODEL: {EXTRACTOR_MODEL}")
-    print(f"  JUDGE_MODEL: {JUDGE_MODEL}")
+    print(f"  EXTRACTOR_MODEL:          {EXTRACTOR_MODEL}")
+    print(f"  EXTRACTOR_FALLBACK_MODEL: {EXTRACTOR_FALLBACK_MODEL}")
+    print(f"  JUDGE_MODEL:              {JUDGE_MODEL}")
+    print(f"  MAX_JUDGE_CHUNKS:         {MAX_JUDGE_EVIDENCE_CHUNKS}")
+    print(f"  MAX_JUDGE_CHUNK_WORDS:    {MAX_JUDGE_CHUNK_WORDS}")
 
-    print("\nRate Limiting:")
-    print(f"  SEC_MIN_REQUEST_INTERVAL: {SEC_MIN_REQUEST_INTERVAL}s")
+    print("\nProvider Rate Limits:")
+    print(f"  Gemini Generate: {GEMINI_GENERATE_RPM} RPM, {GEMINI_GENERATE_RPD} RPD")
+
+    print(f"  Groq:            {GROQ_RPM} RPM, {GROQ_RPD} RPD")
+    print(f"  Breaker Cooldown:{CIRCUIT_BREAKER_COOLDOWN_SECONDS}s")
+    print(f"  SEC Interval:    {SEC_MIN_REQUEST_INTERVAL}s")
 
     print("\nConfig loaded successfully!")

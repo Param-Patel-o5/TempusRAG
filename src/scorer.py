@@ -2,7 +2,7 @@
 
 This module computes confidence_score on promises using rule-based signals, aggregates
 delivery scores across domains and years, and produces a final CompanyCredibilityReport.
-Pure Python — no LLM calls, no I/O beyond logging.
+Pure Python: no LLM calls, no I/O beyond logging.
 """
 
 import logging
@@ -35,8 +35,21 @@ def compute_confidence_score(promise: Promise) -> float:
         score += CONFIDENCE_SIGNAL_WEIGHTS["has_deadline"]
         signals_matched.append("has_deadline")
     
-    # Signal 2: has_metric (0.3 weight) - detect numbers in promise text
-    if re.search(r'\d', promise.promise_text):
+    # Signal 2: has_metric (0.3 weight): detect real quantitative targets.
+    # Requires at least one of: percentage, dollar/unit amount, multiplier, or
+    # a standalone number with a business unit (million, billion, basis points, days).
+    # Intentionally skips bare years like "2024" which are deadlines, not metrics.
+    _METRIC_RE = re.compile(
+        r'\d+\s*%'                          # percentage: 40%, 12.5 %
+        r'|\$\s*\d'                          # dollar amount: $2B, $100M
+        r'|\d+\s*x\b'                        # multiplier: 3x, 2x
+        r'|\d+\s*(?:million|billion|bn|M\b|B\b)'  # large units
+        r'|\d+\s*(?:basis points?|bps?)'     # financial: 50 bps
+        r'|\d+\s*(?:days?|months?|quarters?)' # time-bound metric: 30 days
+        r'|\b\d{2,}\s*(?:employees?|customers?|stores?|locations?)',  # scale: 500 employees
+        re.IGNORECASE,
+    )
+    if _METRIC_RE.search(promise.promise_text):
         score += CONFIDENCE_SIGNAL_WEIGHTS["has_metric"]
         signals_matched.append("has_metric")
     
@@ -306,7 +319,8 @@ def generate_credibility_report(company_ticker: str, company_display_name: str,
             abandoned=0,
             overall_score=0.0,
             domain_scores={},
-            red_flags=["No delivery evidence available"]
+            red_flags=["No delivery evidence available"],
+            insufficient_data=(len(all_promises) == 0),
         )
     
     # Compute aggregations

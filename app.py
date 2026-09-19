@@ -1,4 +1,4 @@
-"""TempusRAG dashboard — corporate commitment intelligence over SEC 10-Ks."""
+"""TempusRAG dashboard: corporate commitment intelligence over SEC 10-Ks."""
 
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ import streamlit as st
 from src.config import GEMINI_API_KEY, GROQ_API_KEY
 from src.ingestion import load_company_directory
 from src.models import CompanyCredibilityReport, DeliveryEvidence
-from src.pipeline import get_last_artifacts, run_tempusrag_pipeline
-from src.query import process_query
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Quiet noisy third-party loggers
+for _noisy in ("httpx", "huggingface_hub", "sentence_transformers", "chromadb"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 st.set_page_config(
     page_title="TempusRAG",
@@ -26,6 +28,20 @@ st.set_page_config(
 )
 
 STATUS_ORDER = ("Delivered", "Partial", "Silently Abandoned", "Pending")
+
+
+def _start_background_warmup() -> None:
+    """Pre-warm SentenceTransformer and PyTorch in background thread so Analyze starts instantly."""
+    import threading
+
+    def _warm() -> None:
+        try:
+            from src.embedder import _get_sentence_transformer
+            _get_sentence_transformer()
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 
 def init_session_state() -> None:
@@ -44,10 +60,15 @@ def init_session_state() -> None:
         "selected_row": 0,
         "status_filter": "All",
         "elapsed_seconds": None,
+        "_model_warmed": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    if not st.session_state.get("_model_warmed"):
+        st.session_state["_model_warmed"] = True
+        _start_background_warmup()
 
 
 def inject_css() -> None:
@@ -237,15 +258,156 @@ div[data-testid="stSidebar"] {
 [data-testid="stMetricValue"] {
     font-family: "Fraunces", serif;
 }
+
+.tr-badge {
+    display: inline-block;
+    padding: 0.22rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.tr-badge-delivered {
+    background: #064E3B;
+    color: #34D399;
+    border: 1px solid #059669;
+}
+.tr-badge-partial {
+    background: #451A03;
+    color: #FBBF24;
+    border: 1px solid #D97706;
+}
+.tr-badge-abandoned {
+    background: #450A0A;
+    color: #F87171;
+    border: 1px solid #DC2626;
+}
+.tr-badge-pending {
+    background: #1E293B;
+    color: #93C5FD;
+    border: 1px solid #3B82F6;
+}
+.tr-badge-broken {
+    background: #450A0A;
+    color: #EF4444;
+    border: 1px solid #DC2626;
+}
+
+.tr-detail-card {
+    background: #32302A;
+    border: 1px solid #4A463C;
+    border-radius: 10px;
+    padding: 1.15rem;
+    margin-top: 0.85rem;
+    margin-bottom: 0.85rem;
+}
+.tr-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.65rem;
+}
+.tr-detail-score {
+    font-size: 0.85rem;
+    color: #B5AFA3;
+}
+.tr-detail-score strong {
+    color: #F4F1EA;
+    font-size: 1.05rem;
+}
+.tr-detail-quote {
+    font-family: "Fraunces", Georgia, serif;
+    font-size: 1.05rem;
+    line-height: 1.45;
+    color: #F4F1EA;
+    margin-bottom: 0.5rem;
+}
+.tr-detail-meta {
+    font-size: 0.78rem;
+    color: #B5AFA3;
+}
+
+.tr-reasoning-card {
+    background: #2D2B24;
+    border-left: 3px solid #D97757;
+    border-radius: 0 8px 8px 0;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+}
+.tr-card-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #D97757;
+    margin-bottom: 0.35rem;
+}
+.tr-reasoning-text {
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: #E4DFD4;
+}
+
+.tr-evidence-card {
+    background: #2B2923;
+    border: 1px solid #454137;
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.65rem;
+}
+.tr-evidence-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #C2BAAC;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.4rem;
+}
+.tr-evidence-text {
+    font-size: 0.84rem;
+    line-height: 1.5;
+    color: #E0DDD5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Filing Q&A Chat Message Styling */
+[data-testid="stChatMessage"] {
+    background: #32302A !important;
+    border: 1px solid #4A463C !important;
+    border-radius: 8px !important;
+    padding: 0.75rem 1rem !important;
+    margin-bottom: 0.75rem !important;
+}
+[data-testid="stChatMessage"] p, [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {
+    color: #F4F1EA !important;
+    font-size: 0.92rem !important;
+    line-height: 1.5 !important;
+}
 </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-@st.cache_resource(show_spinner="Loading SEC issuer list…")
+@st.cache_resource(show_spinner=False, ttl=3600)
+def _cached_issuer_directory() -> list[dict[str, str]]:
+    data = load_company_directory()
+    if not data:
+        raise RuntimeError("Empty issuer directory returned from EDGAR")
+    return data
+
+
 def issuer_directory() -> list[dict[str, str]]:
-    return load_company_directory()
+    """
+    Load the SEC issuer list once per hour and cache it.
+    Does not cache failed empty responses so subsequent retries succeed.
+    """
+    try:
+        return _cached_issuer_directory()
+    except Exception as exc:
+        logger.warning("Could not load SEC issuer directory: %s", exc)
+        return []
 
 
 def search_issuers(query: str, directory: list[dict[str, str]], limit: int = 8) -> list[dict[str, str]]:
@@ -400,12 +562,15 @@ def run_analysis(ticker: str) -> None:
         return
 
     st.session_state.analysis_running = True
+    rerun_needed = False
     try:
         stage_box = st.empty()
         stage_box.markdown(stages_html("Validate"), unsafe_allow_html=True)
 
         def on_stage(label: str) -> None:
             stage_box.markdown(stages_html(label), unsafe_allow_html=True)
+
+        from src.pipeline import get_last_artifacts, run_tempusrag_pipeline
 
         report = run_tempusrag_pipeline(
             ticker=ticker,
@@ -423,12 +588,17 @@ def run_analysis(ticker: str) -> None:
         st.session_state.elapsed_seconds = artifacts.get("elapsed_seconds")
         st.session_state.conversation = []
         st.session_state.selected_row = 0
-        st.rerun()
+        rerun_needed = True
     except Exception as exc:
         logger.exception("Pipeline failed for %s", ticker)
         st.error(classify_error(exc))
     finally:
         st.session_state.analysis_running = False
+
+    # st.rerun() must be called AFTER the finally block so analysis_running
+    # is always reset before the rerun is triggered.
+    if rerun_needed:
+        st.rerun()
 
 
 def evidence_rows(evidence: list[DeliveryEvidence]) -> list[dict[str, Any]]:
@@ -440,12 +610,12 @@ def evidence_rows(evidence: list[DeliveryEvidence]) -> list[dict[str, Any]]:
                 "Domain": item.promise.domain,
                 "Status": item.status,
                 "Score": item.delivery_score,
-                "Deadline": item.promise.deadline_mentioned or "—",
-                "Found": item.year_found if item.year_found is not None else "—",
+                "Deadline": item.promise.deadline_mentioned or "N/A",
+                "Found": item.year_found if item.year_found is not None else "N/A",
                 "Commitment": item.promise.promise_text,
-                "Evidence": item.evidence_text or "—",
+                "Evidence": item.evidence_text or "N/A",
                 "Reasoning": item.judge_reasoning,
-                "Confidence": item.promise.confidence_score if item.promise.confidence_score is not None else "—",
+                "Confidence": item.promise.confidence_score if item.promise.confidence_score is not None else "N/A",
                 "Page": item.promise.page_number,
             }
         )
@@ -456,7 +626,7 @@ def render_masthead(report: CompanyCredibilityReport | None) -> None:
     years = ""
     elapsed = ""
     if report:
-        years = " · ".join(str(y) for y in report.years_analyzed) or "—"
+        years = " · ".join(str(y) for y in report.years_analyzed) or "N/A"
         if st.session_state.elapsed_seconds is not None:
             elapsed = f"{st.session_state.elapsed_seconds:.0f}s last run"
     st.markdown(
@@ -474,12 +644,18 @@ def render_masthead(report: CompanyCredibilityReport | None) -> None:
 
 
 def render_toolbar() -> None:
+    # -- issuer directory ---------------------------------------------------
+    # Load lazily so the page renders immediately on first visit.
+    # On the very first run session_state["_dir_loaded"] is False; we kick off
+    # the (cached) directory load and rerun so the selectbox appears on the
+    # second render cycle, which is instant because the resource is now cached.
     directory: list[dict[str, str]] = []
-    try:
-        directory = issuer_directory()
-    except Exception as exc:
-        logger.exception("Failed to load SEC issuer directory")
-        st.session_state["_directory_error"] = str(exc)
+    directory = issuer_directory()
+    if directory:
+        st.session_state["_dir_loaded"] = True
+        st.session_state.pop("_directory_error", None)
+    else:
+        st.session_state["_directory_error"] = "SEC issuer list unavailable"
 
     if "issuer_search_box" not in st.session_state:
         st.session_state.issuer_search_box = st.session_state.issuer_query
@@ -488,7 +664,7 @@ def render_toolbar() -> None:
     with search_col:
         st.text_input(
             "Issuer",
-            placeholder="Company name or ticker — Apple, Hartford, AAPL, HIG",
+            placeholder="Company name or ticker: Apple, Hartford, AAPL, HIG",
             label_visibility="collapsed",
             key="issuer_search_box",
         )
@@ -497,7 +673,7 @@ def render_toolbar() -> None:
     matches = search_issuers(st.session_state.issuer_query, directory, limit=8)
 
     if directory and st.session_state.issuer_query.strip() and matches:
-        labels = [f"{m['ticker']}  —  {m['title']}" for m in matches]
+        labels = [f"{m['ticker']} : {m['title']}" for m in matches]
         current_label = None
         for label, row in zip(labels, matches):
             if row["ticker"] == st.session_state.ticker:
@@ -514,7 +690,7 @@ def render_toolbar() -> None:
         st.session_state.ticker = chosen["ticker"]
         st.session_state.company_name = chosen["title"]
     elif st.session_state.issuer_query.strip() and not matches:
-        st.caption("No listed match.")
+        st.caption("No listed match." if directory else "Issuer directory not available: enter a ticker directly.")
     else:
         resolved = resolve_issuer(st.session_state.ticker, directory)
         if resolved:
@@ -531,12 +707,12 @@ def render_toolbar() -> None:
             "Analyze",
             type="primary",
             disabled=st.session_state.analysis_running,
-            use_container_width=True,
+            width="stretch",
         )
 
     if st.session_state.get("_directory_error") and not directory:
         st.warning(
-            "Could not load the SEC issuer directory. You can still enter a ticker if it is known. "
+            "Could not load the SEC issuer directory. You can still enter a ticker directly. "
             f"({st.session_state['_directory_error']})"
         )
 
@@ -558,17 +734,30 @@ def render_hero(report: CompanyCredibilityReport) -> None:
     total = report.total_promises or 0
     delivered_pct = (report.delivered / total * 100) if total else 0.0
     years_n = len(report.years_analyzed)
-    thesis = (
-        f"{report.company} delivered on {report.delivered} of {total} extracted forward-looking "
-        f"commitments across {years_n} fiscal year{'s' if years_n != 1 else ''} "
-        f"({delivered_pct:.0f}% delivered). "
-        f"{len(report.red_flags)} risk flag{'s' if len(report.red_flags) != 1 else ''}."
-    )
+
+    if report.insufficient_data:
+        thesis = (
+            f"No forward-looking commitments were extracted from {report.company}'s "
+            f"filings across {years_n} fiscal year{'s' if years_n != 1 else ''}. "
+            "The pipeline ran successfully but found no scorable promises; "
+            "this may indicate a section-detection issue or that the filings are "
+            "primarily backward-looking. Check the logs for details."
+        )
+        score_display = "N/A"
+    else:
+        thesis = (
+            f"{report.company} delivered on {report.delivered} of {total} extracted forward-looking "
+            f"commitments across {years_n} fiscal year{'s' if years_n != 1 else ''} "
+            f"({delivered_pct:.0f}% delivered). "
+            f"{len(report.red_flags)} risk flag{'s' if len(report.red_flags) != 1 else ''}."
+        )
+        score_display = f"{report.overall_score:.0f}"
+
     st.markdown(
         f"""
 <div class="tr-score-wrap">
   <div class="tr-score-label">Credibility score</div>
-  <div class="tr-score">{report.overall_score:.0f}<span> / 100</span></div>
+  <div class="tr-score">{score_display}<span> / 100</span></div>
   <p class="tr-thesis">{thesis}</p>
 </div>
 <div class="tr-kpis">
@@ -601,6 +790,41 @@ def render_domains_and_flags(report: CompanyCredibilityReport) -> None:
                 st.markdown(f'<div class="tr-flag">{flag}</div>', unsafe_allow_html=True)
 
 
+def parse_evidence_chunks(raw_evidence: str, status: str = "", year_made: int = 0) -> list[tuple[str, str]]:
+    """Parse combined evidence string into list of (header, text) tuples."""
+    cleaned = (raw_evidence or "").strip()
+    if not cleaned or cleaned in ("N/A", "-", "None"):
+        if status == "Pending":
+            return [("Status Context", f"Pending evaluation: Commitment was made in FY {year_made} (the most recent analyzed fiscal year). Delivery will be assessed against future 10-K filings.")]
+        if "abandoned" in status.lower():
+            return [("Status Context", "No confirming evidence found in subsequent 10-K filings across MD&A, Business, or Outlook sections.")]
+        return []
+
+    pattern = re.compile(
+        r"(\[(?:FY\s*)?\d{4}\s*\|[^\]]+\]|\[[^\]]+\|\s*\d{4}\s*\|[^\]]+\]|--- Chunk \d+ ---)",
+        re.IGNORECASE,
+    )
+    splits = pattern.split(cleaned)
+    if len(splits) > 1:
+        chunks = []
+        i = 1
+        while i < len(splits):
+            hdr = splits[i].strip().strip("[]- ")
+            body = splits[i + 1].strip() if (i + 1) < len(splits) else ""
+            if body:
+                chunks.append((hdr, body))
+            i += 2
+        if chunks:
+            return chunks
+
+    if "\n\n---\n\n" in cleaned or "\n---\n" in cleaned:
+        raw_parts = [p.strip() for p in re.split(r"\n+---+\n+", cleaned) if p.strip()]
+        if len(raw_parts) > 1:
+            return [(f"Excerpt {idx + 1}", part) for idx, part in enumerate(raw_parts)]
+
+    return [("10-K Evidence Context", cleaned)]
+
+
 def render_commitments() -> None:
     evidence: list[DeliveryEvidence] = st.session_state.evidence or []
     st.markdown("**Commitments**")
@@ -622,16 +846,31 @@ def render_commitments() -> None:
         rows = [r for r in rows if r["Status"] == choice]
 
     display = [
-        {k: r[k] for k in ("Year", "Domain", "Status", "Score", "Deadline", "Commitment")}
+        {
+            "Year": r["Year"],
+            "Domain": r["Domain"],
+            "Status": r["Status"],
+            "Score": r["Score"],
+            "Deadline": r["Deadline"],
+            "Commitment": r["Commitment"],
+        }
         for r in rows
     ]
     event = st.dataframe(
         display,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         on_select="rerun",
         selection_mode="single-row",
         height=360,
+        column_config={
+            "Year": st.column_config.NumberColumn("Year", format="%d", width="small"),
+            "Domain": st.column_config.TextColumn("Domain", width="small"),
+            "Status": st.column_config.TextColumn("Status", width="small"),
+            "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+            "Deadline": st.column_config.TextColumn("Deadline", width="small"),
+            "Commitment": st.column_config.TextColumn("Commitment", width="large"),
+        },
     )
 
     selected = 0
@@ -648,17 +887,66 @@ def render_commitments() -> None:
 
     selected = min(selected, len(rows) - 1)
     detail = rows[selected]
-    st.markdown("**Selected judgment**")
-    st.write(detail["Commitment"])
-    st.caption(
-        f"{detail['Domain']} · made {detail['Year']} · deadline {detail['Deadline']} · "
-        f"evidence year {detail['Found']} · page {detail['Page']} · "
-        f"confidence {detail['Confidence']}"
+
+    status = detail["Status"]
+    score = detail["Score"]
+    status_key = status.lower()
+    if "delivered" in status_key:
+        badge_cls = "tr-badge-delivered"
+    elif "partial" in status_key:
+        badge_cls = "tr-badge-partial"
+    elif "abandoned" in status_key:
+        badge_cls = "tr-badge-abandoned"
+    elif "pending" in status_key:
+        badge_cls = "tr-badge-pending"
+    else:
+        badge_cls = "tr-badge-pending"
+
+    st.markdown(
+        f"""
+<div class="tr-detail-card">
+  <div class="tr-detail-header">
+    <span class="tr-badge {badge_cls}">{status}</span>
+    <span class="tr-detail-score">Delivery Score: <strong>{score}</strong> / 100</span>
+  </div>
+  <div class="tr-detail-quote">"{detail['Commitment']}"</div>
+  <div class="tr-detail-meta">
+    {detail['Domain']} · Made FY {detail['Year']} · Target Deadline: {detail['Deadline']} · Found FY: {detail['Found']} · Page: {detail['Page']}
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.markdown("**Evidence**")
-    st.write(detail["Evidence"])
-    st.markdown("**Judge reasoning**")
-    st.write(detail["Reasoning"])
+
+    st.markdown(
+        f"""
+<div class="tr-reasoning-card">
+  <div class="tr-card-title">LLM Judge Reasoning</div>
+  <div class="tr-reasoning-text">{detail['Reasoning']}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("**10-K Evidence Context**")
+    evidence_items = parse_evidence_chunks(
+        detail["Evidence"],
+        status=detail["Status"],
+        year_made=detail["Year"],
+    )
+    if not evidence_items:
+        st.caption("No evidence chunks available.")
+    else:
+        for header, body in evidence_items:
+            st.markdown(
+                f"""
+<div class="tr-evidence-card">
+  <div class="tr-evidence-badge">{header}</div>
+  <div class="tr-evidence-text">{body}</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 def conversation_as_strings() -> list[str]:
@@ -680,7 +968,7 @@ def format_chunk_cite(chunk: Any) -> str:
 
 def render_ask() -> None:
     st.markdown("**Filing Q&A**")
-    st.caption("Ask after the report — answers cite retrieved 10-K chunks.")
+    st.caption("Ask after the report: answers cite retrieved 10-K chunks.")
 
     if not st.session_state.conversation:
         st.caption("No questions yet.")
@@ -688,11 +976,11 @@ def render_ask() -> None:
 
     for message in st.session_state.conversation:
         with st.chat_message(message["role"]):
-            st.write(message["content"])
+            st.markdown(message["content"])
             cites = message.get("cites") or []
             if cites:
                 st.markdown(
-                    '<p class="tr-cite">' + " · ".join(cites) + "</p>",
+                    '<p class="tr-cite">Sources: ' + " · ".join(cites) + "</p>",
                     unsafe_allow_html=True,
                 )
 
@@ -701,12 +989,14 @@ def handle_chat_prompt(prompt: str) -> None:
     st.session_state.conversation.append({"role": "user", "content": prompt})
     gemini_key, _ = get_active_api_keys()
     try:
-        result = process_query(
-            query=prompt,
-            ticker=st.session_state.ticker,
-            conversation_history=conversation_as_strings()[:-1],
-            api_key=gemini_key,
-        )
+        from src.query import process_query
+        with st.spinner("Analyzing filings and generating answer..."):
+            result = process_query(
+                query=prompt,
+                ticker=st.session_state.ticker,
+                conversation_history=conversation_as_strings()[:-1],
+                api_key=gemini_key,
+            )
         chunks = result.get("source_chunks") or []
         cites = [format_chunk_cite(c) for c in chunks[:5]]
         st.session_state.conversation.append(
@@ -749,7 +1039,7 @@ def main() -> None:
     with ask_col:
         render_ask()
 
-    prompt = st.chat_input("Ask about this issuer’s filings")
+    prompt = st.chat_input("Ask about this issuer's filings")
     if prompt:
         handle_chat_prompt(prompt)
 

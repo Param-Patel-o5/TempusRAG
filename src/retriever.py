@@ -21,7 +21,7 @@ from src.models import Chunk
 logger = logging.getLogger(__name__)
 
 
-def dense_search(query: str, ticker: str, top_k: int = DENSE_TOP_K) -> list[tuple[str, float]]:
+def dense_search(query: str, ticker: str, top_k: int = DENSE_TOP_K, year: int | None = None) -> list[tuple[str, float]]:
     """
     Perform dense semantic search using ChromaDB.
     
@@ -29,6 +29,7 @@ def dense_search(query: str, ticker: str, top_k: int = DENSE_TOP_K) -> list[tupl
         query: Search query string.
         ticker: Company ticker symbol.
         top_k: Number of results to return.
+        year: Optional year filter: only return chunks from this fiscal year.
         
     Returns:
         list[tuple[str, float]]: List of (chunk_id, score) tuples, ranked best-first.
@@ -37,29 +38,34 @@ def dense_search(query: str, ticker: str, top_k: int = DENSE_TOP_K) -> list[tupl
         # Get ChromaDB collection
         collection = get_chroma_collection(ticker)
         
-        # Embed the query
+        # Embed the query using local model
         model = _get_embedding_model()
-        query_embedding = model.encode([query], show_progress_bar=False)[0]
+        query_embedding = model.encode_query(query)
+
+        # Build optional year filter (Chroma 1.x where-clause style)
+        where_filter = {"year": {"$eq": int(year)}} if year is not None else None
         
         # Query ChromaDB
-        results = collection.query(
+        query_kwargs: dict = dict(
             query_embeddings=[query_embedding.tolist()],
             n_results=top_k,
-            include=["distances", "metadatas", "documents"]
+            include=["distances", "metadatas", "documents"],
         )
+        if where_filter:
+            query_kwargs["where"] = where_filter
+
+        results = collection.query(**query_kwargs)
         
-        # Extract results - ChromaDB returns distances (smaller = more similar)
-        # Convert to similarity scores (higher = better) for consistent ranking
+        # Extract results - ChromaDB returns cosine distance (dist = 1 - cosine_similarity)
+        if not results["ids"] or not results["ids"][0]:
+            return []
+
         chunk_ids = results["ids"][0]
         distances = results["distances"][0]
         
-        # Convert distances to similarity scores (1 / (1 + distance))
-        # NOTE: This assumes distances are non-negative (true for cosine distance, ChromaDB's default).
-        # If ChromaDB's distance metric is changed to something that can be negative, 
-        # this conversion will break and needs to be updated accordingly.
-        similarities = [1.0 / (1.0 + dist) for dist in distances]
+        # For unit-normalized vectors with cosine distance, similarity = 1.0 - dist
+        similarities = [max(-1.0, min(1.0, 1.0 - float(dist))) for dist in distances]
         
-        # Combine and sort by similarity (descending)
         ranked_results = list(zip(chunk_ids, similarities))
         ranked_results.sort(key=lambda x: x[1], reverse=True)
         
@@ -71,7 +77,7 @@ def dense_search(query: str, ticker: str, top_k: int = DENSE_TOP_K) -> list[tupl
         return []
 
 
-def sparse_search(query: str, ticker: str, top_k: int = SPARSE_TOP_K) -> list[tuple[str, float]]:
+def sparse_search(query: str, ticker: str, top_k: int = SPARSE_TOP_K, year: int | None = None) -> list[tuple[str, float]]:
     """
     Perform sparse keyword search using BM25.
     
@@ -79,6 +85,7 @@ def sparse_search(query: str, ticker: str, top_k: int = SPARSE_TOP_K) -> list[tu
         query: Search query string.
         ticker: Company ticker symbol.
         top_k: Number of results to return.
+        year: Optional year filter: only return chunks from this fiscal year.
         
     Returns:
         list[tuple[str, float]]: List of (chunk_id, score) tuples, ranked best-first.
@@ -101,16 +108,19 @@ def sparse_search(query: str, ticker: str, top_k: int = SPARSE_TOP_K) -> list[tu
     # Get BM25 scores
     scores = bm25_index.get_scores(query_tokens)
     
-    # Get top-k indices
-    top_indices = np.argsort(scores)[::-1][:top_k]
+    # Get top candidate indices
+    top_indices = np.argsort(scores)[::-1]
     
-    # Map indices to chunk_ids and scores
+    # Map indices to chunk_ids and scores with optional year filter
     results = []
     for idx in top_indices:
-        if idx < len(chunks) and scores[idx] > 0:  # Only include positive scores
-            chunk_id = chunks[idx].chunk_id
-            score = float(scores[idx])
-            results.append((chunk_id, score))
+        if idx < len(chunks) and scores[idx] > 0:
+            chunk = chunks[idx]
+            if year is not None and chunk.year != int(year):
+                continue
+            results.append((chunk.chunk_id, float(scores[idx])))
+            if len(results) >= top_k:
+                break
     
     logger.debug(f"Sparse search for '{query}' in {ticker}: {len(results)} results")
     return results
@@ -166,6 +176,10 @@ def apply_section_boost(
     """
     Apply section-based score boosting.
     
+    Keys in SECTION_BOOST_WEIGHTS are matched as case-insensitive substrings
+    against chunk.section. The highest-matching boost is used if multiple keys
+    match the same section label.
+    
     Args:
         ranked_chunk_ids: List of (chunk_id, score) tuples.
         chunk_lookup: Mapping from chunk_id to Chunk objects.
@@ -181,14 +195,21 @@ def apply_section_boost(
             continue
         
         chunk = chunk_lookup[chunk_id]
-        section = chunk.section
+        section_lower = chunk.section.lower()
         
-        # Get boost weight
-        boost_weight = SECTION_BOOST_WEIGHTS.get(section, DEFAULT_SECTION_BOOST)
+        # Substring match: find the highest-priority boost key that appears in the section label
+        boost_weight = DEFAULT_SECTION_BOOST
+        for key, weight in SECTION_BOOST_WEIGHTS.items():
+            if key.lower() in section_lower:
+                if weight > boost_weight or boost_weight == DEFAULT_SECTION_BOOST:
+                    boost_weight = weight
+        
         boosted_score = score * boost_weight
-        
         boosted_results.append((chunk_id, boosted_score))
-        logger.debug(f"Boosted {chunk_id} (section: {section}): {score:.4f} -> {boosted_score:.4f} (boost: {boost_weight})")
+        logger.debug(
+            f"Boosted {chunk_id} (section: {chunk.section}): "
+            f"{score:.4f} -> {boosted_score:.4f} (boost: {boost_weight})"
+        )
     
     # Re-sort by boosted score
     boosted_results.sort(key=lambda x: x[1], reverse=True)
@@ -259,22 +280,21 @@ def build_chunk_lookup(ticker: str) -> dict[str, Chunk]:
     return chunk_lookup
 
 
-def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N) -> list[Chunk]:
+def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N, year: int | None = None) -> list[Chunk]:
     """
     Perform hybrid retrieval with RRF fusion, boosting, and reordering.
-    
-    Main orchestration function that combines dense and sparse search results,
-    applies RRF fusion, section boosting, and lost-in-middle reordering.
     
     Args:
         query: Search query string.
         ticker: Company ticker symbol.
         top_n: Number of final results to return.
+        year: Optional year filter: restricts retrieval to chunks from this fiscal year.
         
     Returns:
         list[Chunk]: Final ranked and reordered chunks, length <= top_n.
     """
-    logger.info(f"Hybrid retrieval for '{query}' in {ticker}, requesting top {top_n}")
+    logger.info(f"Hybrid retrieval for '{query}' in {ticker}, requesting top {top_n}"
+                + (f", year={year}" if year else ""))
     
     # Build chunk lookup first (needed for boosting and final mapping)
     chunk_lookup = build_chunk_lookup(ticker)
@@ -282,9 +302,9 @@ def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N) -> list[C
         logger.warning(f"No chunks available for {ticker}")
         return []
     
-    # Parallel dense and sparse search
-    dense_results = dense_search(query, ticker)
-    sparse_results = sparse_search(query, ticker)
+    # Dense and sparse search (both with optional year filter)
+    dense_results = dense_search(query, ticker, year=year)
+    sparse_results = sparse_search(query, ticker, top_k=SPARSE_TOP_K, year=year)
     
     if not dense_results and not sparse_results:
         logger.warning(f"Both dense and sparse search returned no results for '{query}' in {ticker}")
@@ -322,63 +342,87 @@ def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N) -> list[C
 
 
 if __name__ == "__main__":
-    import logging
+    from src.embedder import _get_chroma_client, embed_and_store_chunks, _bm25_indices
     
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     
-    # Test hybrid retrieval (assumes HIG has been embedded via embedder.py)
-    query = "technology investments and digital claims platform"
-    ticker = "HIG"
+    print("=== Testing retriever.py offline verification tests ===")
     
-    print(f"Testing hybrid retrieval...")
-    print(f"Query: '{query}'")
-    print(f"Ticker: {ticker}")
-    print()
-    
+    TEST_TICKER = "RTRV_TEST"
+    client = _get_chroma_client()
     try:
-        results = hybrid_retrieve(query, ticker=ticker, top_n=5)
-        
-        print(f"Retrieved {len(results)} chunks:")
-        print()
-        
-        for i, chunk in enumerate(results, 1):
-            print(f"{i}. {chunk.chunk_id}")
-            print(f"   Section: {chunk.section}")
-            if chunk.subsection != "full_text":
-                print(f"   Subsection: {chunk.subsection}")
-            print(f"   Text: {chunk.text[:100]}...")
-            print()
-        
-        # Test individual components
-        print("--- Component Testing ---")
-        
-        # Test dense search
-        dense_results = dense_search(query, ticker, top_k=3)
-        print(f"Dense search: {len(dense_results)} results")
-        for chunk_id, score in dense_results[:2]:
-            print(f"  {chunk_id}: {score:.4f}")
-        
-        # Test sparse search
-        sparse_results = sparse_search(query, ticker, top_k=3)
-        print(f"Sparse search: {len(sparse_results)} results")
-        for chunk_id, score in sparse_results[:2]:
-            print(f"  {chunk_id}: {score:.4f}")
-        
-        # Test RRF fusion
-        if dense_results or sparse_results:
-            fused = reciprocal_rank_fusion(dense_results, sparse_results)
-            print(f"RRF fusion: {len(fused)} results")
-            for chunk_id, score in fused[:2]:
-                print(f"  {chunk_id}: {score:.4f}")
-        
-        # Test lost-in-middle reordering
-        test_ids = ['A', 'B', 'C', 'D', 'E']
-        reordered = lost_in_middle_reorder(test_ids)
-        print(f"Lost-in-middle test: {test_ids} -> {reordered}")
-        
-        print("\nHybrid retrieval test complete!")
-        
-    except Exception as e:
-        print(f"Test failed: {e}")
-        import traceback
-        traceback.print_exc()
+        client.delete_collection(TEST_TICKER)
+    except Exception:
+        pass
+    _bm25_indices.pop(TEST_TICKER, None)
+    
+    # Create sample chunks across two years
+    test_chunks = [
+        Chunk(
+            text="We plan to expand our cloud computing footprint by 30% next year.",
+            company=TEST_TICKER,
+            year=2024,
+            section="Item 7 MD&A",
+            subsection="Cloud Strategy",
+            chunk_id=f"{TEST_TICKER}_2024_01",
+            word_count=12,
+        ),
+        Chunk(
+            text="Risk factors include macroeconomic headwinds and semiconductor shortages.",
+            company=TEST_TICKER,
+            year=2024,
+            section="Item 1A Risk Factors",
+            subsection="full_text",
+            chunk_id=f"{TEST_TICKER}_2024_02",
+            word_count=9,
+        ),
+        Chunk(
+            text="In 2025 our cloud computing footprint expanded by 32%, meeting our targets.",
+            company=TEST_TICKER,
+            year=2025,
+            section="Item 7 MD&A",
+            subsection="Operations Review",
+            chunk_id=f"{TEST_TICKER}_2025_01",
+            word_count=12,
+        ),
+    ]
+    
+    # Embed and index test chunks with all-MiniLM-L6-v2
+    embed_and_store_chunks(test_chunks, ticker=TEST_TICKER, years_covered=[2024, 2025])
+    
+    # 1. Test dense search with cosine similarity (1.0 - dist)
+    dense_res = dense_search("cloud computing expansion", ticker=TEST_TICKER, top_k=2)
+    print(f"\n1. Dense search results: {dense_res}")
+    assert len(dense_res) > 0
+    best_id, best_score = dense_res[0]
+    print(f"   Best match: {best_id} with score {best_score:.4f}")
+    assert best_score > 0.4, f"Expected positive similarity score, got {best_score}"
+    
+    # 2. Test sparse search with year filter
+    sparse_all = sparse_search("cloud computing", ticker=TEST_TICKER, top_k=5)
+    sparse_2025 = sparse_search("cloud computing", ticker=TEST_TICKER, top_k=5, year=2025)
+    print(f"\n2. Sparse search all years: {[cid for cid, _ in sparse_all]}")
+    print(f"   Sparse search year 2025: {[cid for cid, _ in sparse_2025]}")
+    assert all("_2025_" in cid for cid, _ in sparse_2025), "Year filter failed in sparse_search"
+    
+    # 3. Test RRF fusion
+    fused = reciprocal_rank_fusion(dense_res, sparse_all)
+    print(f"\n3. RRF fused results: {fused}")
+    assert len(fused) > 0
+    
+    # 4. Test lost-in-middle reordering
+    test_ids = ["A", "B", "C", "D", "E"]
+    reordered = lost_in_middle_reorder(test_ids)
+    print(f"\n4. Lost-in-middle: {test_ids} -> {reordered}")
+    assert reordered[0] == "A" and reordered[-1] == "B", "Lost-in-middle ordering incorrect"
+    
+    # 5. Test full hybrid_retrieve
+    retrieved = hybrid_retrieve("cloud computing expansion targets", ticker=TEST_TICKER, top_n=2, year=2025)
+    print(f"\n5. Hybrid retrieved chunks (year=2025): {[c.chunk_id for c in retrieved]}")
+    assert len(retrieved) > 0
+    assert retrieved[0].year == 2025
+    
+    # Cleanup
+    client.delete_collection(TEST_TICKER)
+    _bm25_indices.pop(TEST_TICKER, None)
+    print("\nAll retriever.py verification tests passed successfully!")

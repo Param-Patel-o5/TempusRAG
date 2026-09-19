@@ -4,6 +4,7 @@ ARCHITECTURE/
 # Eval generated dumps (regenerate with eval/dump_artifacts.py)
 eval/artifacts/chunks.jsonl
 eval/__pycache__/
+eval
 # Environment and secrets
 .env
 .venv/
@@ -19,7 +20,7 @@ build/
 # Runtime data
 chroma_store/
 logs/
-data/filings/
+data
 
 # IDE
 .idea/

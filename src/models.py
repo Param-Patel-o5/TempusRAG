@@ -36,6 +36,8 @@ class CompanyCredibilityReport(BaseModel):
     overall_score: float = Field(ge=0.0, le=100.0)
     domain_scores: dict[str, float]
     red_flags: list[str]
+    insufficient_data: bool = False
+    """True when no promises were extracted (score of 0.0 means no data, not low credibility)."""
 
 
 class Chunk(BaseModel):

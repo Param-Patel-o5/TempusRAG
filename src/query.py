@@ -1,394 +1,259 @@
-"""
-Natural Language Query Processing for TempusRAG
+"""Natural Language Query Processing for TempusRAG.
 
-Flow 2: Query rewriting, HyDE (hypothetical document expansion), retrieval,
-and answer generation with citations. Optional feature on top of core pipeline.
+Flow 2: query rewriting, HyDE, retrieval, answer generation with citations.
+Uses google.genai (new client style): no global state, thread-safe per-call client.
 """
+
+from __future__ import annotations
 
 import logging
 import re
-from typing import Optional, List, Dict, Any
+from typing import Any
 
-import google.generativeai as genai
+from google import genai
 
-from src.retriever import hybrid_retrieve
-from src.models import Chunk
 from src.config import EXTRACTOR_MODEL, GEMINI_API_KEY
+from src.models import Chunk
+from src.retriever import hybrid_retrieve
 
 logger = logging.getLogger(__name__)
 
-# Configure Gemini client at module level if API key is available
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("Gemini client configured for query processing")
-else:
-    logger.warning(
-        "No GEMINI_API_KEY found in config - API key must be provided at runtime "
-        "for query rewriting and answer generation"
-    )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("google.auth").setLevel(logging.WARNING)
 
 
-def detect_followup_query(query: str, conversation_history: Optional[List[str]] = None) -> bool:
-    """
-    Detect if query is a follow-up that requires context from previous conversation.
-    
-    Args:
-        query: User query text
-        conversation_history: Previous queries/responses in conversation
-        
-    Returns:
-        bool: True if likely a follow-up, False if standalone
-    """
-    query_lower = query.lower().strip()
-    
-    # Pronouns that indicate reference to prior context
+def _gemini_call(prompt: str, api_key: str) -> str:
+    """Single Gemini call: fresh client per request, no global state."""
+    import src.config as cfg
+    model = getattr(cfg, "EXTRACTOR_MODEL", "gemini-3.5-flash")
+    fallback = getattr(cfg, "EXTRACTOR_FALLBACK_MODEL", "gemini-3.5-flash-lite")
+    client = genai.Client(api_key=api_key)
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config={"temperature": 0.3, "max_output_tokens": 2048},
+        )
+    except Exception as e:
+        if fallback and fallback != model:
+            logger.warning("Primary query model %r failed (%s); trying %r", model, e, fallback)
+            response = client.models.generate_content(
+                model=fallback,
+                contents=prompt,
+                config={"temperature": 0.3, "max_output_tokens": 2048},
+            )
+        else:
+            raise
+
+    if not response.candidates:
+        raise RuntimeError("Gemini returned no candidates")
+    text = response.text
+    if text is None:
+        raise RuntimeError("Gemini returned a candidate with no text")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Follow-up detection
+# ---------------------------------------------------------------------------
+
+def detect_followup_query(
+    query: str,
+    conversation_history: list[str] | None = None,
+) -> bool:
+    """Return True if the query looks like a follow-up needing prior context."""
+    q = query.lower().strip()
     followup_indicators = [
         "it", "that", "this", "they", "them", "those", "these",
         "what about", "how about", "and that", "regarding that",
-        "about it", "for that", "with that", "from that"
+        "about it", "for that", "with that", "from that",
     ]
-    
-    # Check for pronoun patterns
-    has_pronouns = any(indicator in query_lower for indicator in followup_indicators)
-    
-    # Additional heuristics
-    starts_with_question_word_only = re.match(r'^(what|how|when|where|why|which)\s*\?*$', query_lower)
+    has_pronouns = any(ind in q for ind in followup_indicators)
+    starts_bare = bool(re.match(r"^(what|how|when|where|why|which)\s*\?*$", q))
     very_short = len(query.split()) <= 3
-    lacks_specifics = not re.search(r'\b(technology|claims|growth|finance|operations|revenue|profit|investment)\b', query_lower, re.IGNORECASE)
-    
-    is_followup = has_pronouns or (very_short and lacks_specifics) or starts_with_question_word_only
-    
-    logger.debug(f"Follow-up detection: {is_followup} (pronouns: {has_pronouns}, "
-                f"very_short: {very_short}, lacks_specifics: {lacks_specifics}) - '{query}'")
-    
-    return is_followup
+    lacks_specifics = not re.search(
+        r"\b(technology|claims|growth|finance|operations|revenue|profit|investment)\b",
+        q,
+    )
+    return has_pronouns or (very_short and lacks_specifics) or starts_bare
 
 
-def rewrite_query(query: str, conversation_history: Optional[List[str]] = None, api_key: Optional[str] = None) -> str:
-    """
-    Rewrite follow-up queries to be standalone by expanding pronouns and implicit references.
-    
-    Args:
-        query: Original query that may be a follow-up
-        conversation_history: Previous queries/responses for context
-        api_key: Optional Gemini API key override
-        
-    Returns:
-        str: Rewritten standalone query, or original if not a follow-up
+def rewrite_query(
+    query: str,
+    conversation_history: list[str] | None = None,
+    api_key: str | None = None,
+) -> str:
+    """Expand a follow-up query into a self-contained standalone question.
+
+    Falls back to the original query if no API key is available or the call fails.
     """
     if not detect_followup_query(query, conversation_history):
-        logger.info(f"Query is standalone, no rewriting needed: '{query}'")
         return query
-    
-    # Resolve API key
-    resolved_api_key = api_key if api_key is not None else GEMINI_API_KEY
-    if not resolved_api_key:
-        logger.warning("No Gemini API key available for query rewriting, returning original query")
+
+    resolved_key = api_key or GEMINI_API_KEY
+    if not resolved_key:
+        logger.warning("No Gemini key for query rewriting: returning original")
         return query
-    
-    # Build context from conversation history
+
     context = ""
     if conversation_history:
-        recent_context = conversation_history[-3:]  # Use last 3 exchanges
-        context = "\n".join(f"Previous: {item}" for item in recent_context)
-    
-    # Build rewriting prompt
-    prompt = f"""You are helping rewrite a follow-up question to be standalone and complete.
+        context = "\n".join(f"Previous: {item}" for item in conversation_history[-3:])
 
-{"CONVERSATION CONTEXT:" if context else ""}
-{context}
+    prompt = f"""You are helping rewrite a follow-up question to be standalone.
+
+{"CONVERSATION CONTEXT:\n" + context if context else ""}
 
 FOLLOW-UP QUESTION: "{query}"
 
-TASK: Rewrite this follow-up question to be a complete, standalone question that doesn't rely on pronouns or implicit references. Include any implied context from the conversation.
-
-Examples:
-- "What about that?" → "What are the financial targets mentioned previously?"
-- "How about the timeline?" → "What is the timeline for the technology investments discussed?"
-- "And the results?" → "What were the results of the initiatives mentioned earlier?"
-
-RESPONSE: Provide only the rewritten standalone question, nothing else."""
+Rewrite it as a complete, standalone question. Reply with the rewritten question only."""
 
     try:
-        # Reconfigure with provided API key
-        genai.configure(api_key=resolved_api_key)
-        
-        model = genai.GenerativeModel(EXTRACTOR_MODEL)
-        response = model.generate_content(prompt)
-        
-        rewritten = response.text.strip().strip('"').strip("'")
-        
-        logger.info(f"Query rewritten: '{query}' → '{rewritten}'")
+        rewritten = _gemini_call(prompt, resolved_key).strip().strip('"').strip("'")
+        logger.info("Query rewritten: %r -> %r", query, rewritten)
         return rewritten
-        
-    except Exception as e:
-        logger.warning(f"Query rewriting failed: {e}, using original query")
+    except Exception as exc:
+        logger.warning("Query rewriting failed (%s): using original", exc)
         return query
 
 
-def generate_hypothetical_answer(query: str, api_key: Optional[str] = None) -> str:
-    """
-    Generate a hypothetical answer for HyDE (Hypothetical Document Expansion).
-    
-    Args:
-        query: User query to generate hypothetical answer for
-        api_key: Optional Gemini API key override
-        
-    Returns:
-        str: Hypothetical answer text for improved retrieval
-    """
-    # Resolve API key
-    resolved_api_key = api_key if api_key is not None else GEMINI_API_KEY
-    if not resolved_api_key:
-        logger.warning("No Gemini API key available for HyDE, returning empty hypothetical")
-        return ""
-    
-    prompt = f"""Generate a hypothetical answer to this question in 2-3 sentences, as if it came from a corporate SEC filing:
-
-Question: {query}
-
-Write a plausible answer mentioning specific business areas, initiatives, or commitments that a company might discuss in their annual report. Be concrete and specific."""
-
-    try:
-        # Reconfigure with provided API key
-        genai.configure(api_key=resolved_api_key)
-        
-        model = genai.GenerativeModel(EXTRACTOR_MODEL)
-        response = model.generate_content(prompt)
-        
-        hypothetical = response.text.strip()
-        
-        logger.debug(f"Generated hypothetical answer: '{hypothetical}'")
-        return hypothetical
-        
-    except Exception as e:
-        logger.warning(f"HyDE generation failed: {e}, returning empty hypothetical")
-        return ""
-
+# ---------------------------------------------------------------------------
+# HyDE
+# ---------------------------------------------------------------------------
 
 def should_use_hyde(query: str) -> bool:
-    """
-    Determine if HyDE would improve retrieval for this query.
-    
-    Args:
-        query: User query text
-        
-    Returns:
-        bool: True if HyDE would help, False if query is already specific
-    """
-    query_lower = query.lower()
-    
-    # Signs that query is already specific (don't need HyDE)
-    has_specific_terms = any(term in query_lower for term in [
+    """Return True when HyDE would improve retrieval for a vague/short query."""
+    q = query.lower()
+    specific = any(t in q for t in [
         "technology", "claims", "growth", "finance", "operations",
         "revenue", "profit", "investment", "digital", "platform",
-        "strategy", "market", "customer", "employee", "regulatory"
-    ])
-    
-    has_numbers = re.search(r'\d+', query)
-    has_years = re.search(r'\b(20\d{2}|202[0-9])\b', query)
-    has_percentages = re.search(r'\d+%', query)
-    
-    is_specific = has_specific_terms or has_numbers or has_years or has_percentages
-    
-    # Signs that query is vague (would benefit from HyDE)
-    is_vague = len(query.split()) <= 5
-    has_general_words = any(word in query_lower for word in [
-        "about", "regarding", "concerning", "what", "how", "tell me"
-    ])
-    
-    use_hyde = (is_vague or has_general_words) and not is_specific
-    
-    logger.debug(f"HyDE decision: {use_hyde} (specific: {is_specific}, vague: {is_vague}) - '{query}'")
-    
-    return use_hyde
+        "strategy", "market", "customer", "employee", "regulatory",
+    ]) or bool(re.search(r"\d", query))
+    vague = len(query.split()) <= 5 or any(
+        w in q for w in ["about", "regarding", "concerning", "what", "how", "tell me"]
+    )
+    return vague and not specific
 
 
-def generate_answer_with_citations(chunks: List[Chunk], query: str, api_key: Optional[str] = None) -> str:
+def generate_hypothetical_answer(query: str, api_key: str | None = None) -> str:
+    """Generate a short hypothetical SEC-filing answer for HyDE retrieval expansion.
+
+    Returns empty string if no key is available or the call fails (non-fatal).
     """
-    Generate an answer to the query based on retrieved chunks with citations.
-    
-    Args:
-        chunks: Retrieved chunks that may contain relevant information
-        query: User query to answer
-        api_key: Optional Gemini API key override
-        
-    Returns:
-        str: Generated answer with embedded citations
-    """
+    resolved_key = api_key or GEMINI_API_KEY
+    if not resolved_key:
+        return ""
+
+    prompt = (
+        f"Generate a 2-3 sentence hypothetical answer to this question, "
+        f"written in the style of a corporate SEC 10-K filing. "
+        f"Be concrete about business areas, initiatives, or commitments.\n\n"
+        f"Question: {query}"
+    )
+    try:
+        return _gemini_call(prompt, resolved_key).strip()
+    except Exception as exc:
+        logger.warning("HyDE generation failed (%s): skipping expansion", exc)
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Answer generation
+# ---------------------------------------------------------------------------
+
+def generate_answer_with_citations(
+    chunks: list[Chunk],
+    query: str,
+    api_key: str | None = None,
+) -> str:
+    """Generate an answer grounded in retrieved chunks, with inline citations."""
     if not chunks:
         return "No relevant information found in the available SEC filings."
-    
-    # Resolve API key
-    resolved_api_key = api_key if api_key is not None else GEMINI_API_KEY
-    if not resolved_api_key:
+
+    resolved_key = api_key or GEMINI_API_KEY
+    if not resolved_key:
         raise ValueError(
-            "No Gemini API key available for answer generation - "
-            "set GEMINI_API_KEY in config or pass one explicitly"
+            "No Gemini API key available for answer generation. "
+            "Set GEMINI_API_KEY in .env or pass api_key explicitly."
         )
-    
-    # Format chunks for the prompt
-    chunk_texts = []
-    for i, chunk in enumerate(chunks, 1):
-        chunk_texts.append(f"[Chunk {i}: {chunk.text}]")
-    
-    chunks_context = "\n\n".join(chunk_texts)
-    
-    # Build answer generation prompt
+
+    chunk_texts = "\n\n".join(
+        f"[Chunk {i} | {c.year} | {c.section}]\n{c.text}"
+        for i, c in enumerate(chunks, 1)
+    )
+
     prompt = f"""Based on these SEC filing excerpts, answer the user's question with specific citations.
 
-SEC FILING EXCERPTS:
-{chunks_context}
+EXCERPTS:
+{chunk_texts}
 
-USER QUESTION: {query}
+QUESTION: {query}
 
-INSTRUCTIONS:
-1. Answer the question based only on the information in the excerpts
-2. Include citations in this format: (Source: {chunks[0].chunk_id if chunks else 'CHUNK_ID'}, Year {chunks[0].year if chunks else 'YEAR'})
-3. Keep citations brief and natural within the text
-4. If the excerpts don't contain enough information to fully answer the question, say so
-5. Be specific and quote relevant details from the filings when possible
+Instructions:
+- Answer using only the information above.
+- Cite sources as (Year YYYY, {chunks[0].section if chunks else 'Section'}).
+- If the excerpts are insufficient, say so.
 
 ANSWER:"""
 
     try:
-        # Reconfigure with provided API key
-        genai.configure(api_key=resolved_api_key)
-        
-        model = genai.GenerativeModel(EXTRACTOR_MODEL)
-        response = model.generate_content(prompt)
-        
-        answer = response.text.strip()
-        
-        logger.info(f"Generated answer with citations: {answer[:100]}...")
+        answer = _gemini_call(prompt, resolved_key).strip()
+        logger.info("Generated answer (%d chars, %d sources)", len(answer), len(chunks))
         return answer
-        
-    except Exception as e:
-        logger.error(f"Answer generation failed: {e}")
-        raise Exception(f"Failed to generate answer: {e}")
+    except Exception as exc:
+        logger.error("Answer generation failed: %s", exc)
+        raise RuntimeError(f"Failed to generate answer: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
 
 def process_query(
-    query: str, 
-    ticker: str, 
-    conversation_history: Optional[List[str]] = None, 
-    use_hyde: Optional[bool] = None, 
-    api_key: Optional[str] = None, 
-    top_n: int = 5
-) -> Dict[str, Any]:
+    query: str,
+    ticker: str,
+    conversation_history: list[str] | None = None,
+    use_hyde: bool | None = None,
+    api_key: str | None = None,
+    top_n: int = 5,
+) -> dict[str, Any]:
+    """End-to-end query processing: rewrite → HyDE → retrieve → answer.
+
+    Returns a dict with keys:
+        query, rewritten_query, used_hyde, hypothetical_answer,
+        answer, source_chunks
     """
-    Main orchestrator for Flow 2 - natural language query processing.
-    
-    Args:
-        query: User query text
-        ticker: Company ticker symbol for retrieval
-        conversation_history: Previous queries/responses for context
-        use_hyde: Force HyDE on/off (None = auto-detect)
-        api_key: Optional Gemini API key override
-        top_n: Number of chunks to retrieve
-        
-    Returns:
-        dict: Query processing results with keys:
-            - query: Original query
-            - rewritten_query: Rewritten query (if was follow-up)
-            - used_hyde: Whether HyDE was used
-            - hypothetical_answer: Hypothetical answer (if HyDE used)
-            - answer: Final generated answer with citations
-            - source_chunks: Retrieved chunks used for answer
-    """
-    logger.info(f"Processing query: '{query}' for ticker {ticker}")
-    
-    # Step 1: Detect and rewrite follow-up queries
+    logger.info("Processing query %r for %s", query, ticker)
+
     is_followup = detect_followup_query(query, conversation_history)
-    rewritten_query = query
-    
-    if is_followup:
-        logger.info("Detected follow-up query, attempting rewrite")
-        rewritten_query = rewrite_query(query, conversation_history, api_key)
-    else:
-        logger.info("Standalone query, no rewriting needed")
-    
-    # Step 2: Decide on HyDE usage
+    rewritten = rewrite_query(query, conversation_history, api_key) if is_followup else query
+
     if use_hyde is None:
-        use_hyde = should_use_hyde(rewritten_query)
-    
-    # Step 3: Generate hypothetical answer if using HyDE
-    hypothetical_answer = ""
-    retrieval_query = rewritten_query
-    
+        use_hyde = should_use_hyde(rewritten)
+
+    hypothetical = ""
+    retrieval_query = rewritten
     if use_hyde:
-        logger.info("Using HyDE for query expansion")
-        hypothetical_answer = generate_hypothetical_answer(rewritten_query, api_key)
-        if hypothetical_answer:
-            retrieval_query = f"{rewritten_query} {hypothetical_answer}"
-    else:
-        logger.info("Not using HyDE, proceeding with direct retrieval")
-    
-    # Step 4: Retrieve relevant chunks
-    logger.info(f"Retrieving {top_n} chunks for: '{retrieval_query[:100]}...'")
+        hypothetical = generate_hypothetical_answer(rewritten, api_key)
+        if hypothetical:
+            retrieval_query = f"{rewritten} {hypothetical}"
+
     try:
         chunks = hybrid_retrieve(retrieval_query, ticker, top_n=top_n)
-        logger.info(f"Retrieved {len(chunks)} chunks")
-    except Exception as e:
-        logger.error(f"Retrieval failed: {e}")
+    except Exception as exc:
+        logger.error("Retrieval failed: %s", exc)
         chunks = []
-    
-    # Step 5: Generate answer with citations
-    logger.info("Generating answer with citations")
+
     try:
-        answer = generate_answer_with_citations(chunks, rewritten_query, api_key)
-    except Exception as e:
-        logger.error(f"Answer generation failed: {e}")
-        answer = f"Failed to generate answer: {e}"
-    
-    # Step 6: Compile results
-    results = {
+        answer = generate_answer_with_citations(chunks, rewritten, api_key)
+    except Exception as exc:
+        logger.error("Answer generation failed: %s", exc)
+        answer = f"Could not generate an answer: {exc}"
+
+    return {
         "query": query,
-        "rewritten_query": rewritten_query if is_followup else None,
+        "rewritten_query": rewritten if is_followup else None,
         "used_hyde": use_hyde,
-        "hypothetical_answer": hypothetical_answer if use_hyde else None,
+        "hypothetical_answer": hypothetical if use_hyde else None,
         "answer": answer,
-        "source_chunks": chunks
+        "source_chunks": chunks,
     }
-    
-    logger.info(f"Query processing complete: {len(answer)} char answer, {len(chunks)} sources")
-    
-    return results
-
-
-if __name__ == "__main__":
-    import logging
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
-    )
-    
-    # Simulate a conversation
-    conversation = []
-    
-    # Query 1: Standalone
-    q1 = "What technology investments did Hartford commit to?"
-    result1 = process_query(q1, ticker="HIG", conversation_history=conversation)
-    print(f"Q1: {q1}")
-    print(f"Answer: {result1['answer']}\n")
-    conversation.append(q1)
-    
-    # Query 2: Follow-up
-    q2 = "What about the timeline for that?"
-    result2 = process_query(q2, ticker="HIG", conversation_history=conversation)
-    print(f"Q2 (original): {q2}")
-    print(f"Q2 (rewritten): {result2['rewritten_query']}")
-    print(f"Answer: {result2['answer']}\n")
-    conversation.append(q2)
-    
-    # Query 3: Vague query that should use HyDE
-    q3 = "Tell me about growth"
-    result3 = process_query(q3, ticker="HIG", conversation_history=conversation)
-    print(f"Q3: {q3}")
-    print(f"Used HyDE: {result3['used_hyde']}")
-    if result3['hypothetical_answer']:
-        print(f"Hypothetical: {result3['hypothetical_answer']}")
-    print(f"Answer: {result3['answer']}\n")
-    
-    print("Query processing demo complete!")
