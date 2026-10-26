@@ -239,20 +239,17 @@ def lost_in_middle_reorder(ranked_chunk_ids: list[str]) -> list[str]:
     elif n == 2:
         return ranked_chunk_ids.copy()  # rank 1 at pos 0, rank 2 at pos 1
     
-    # For n >= 3: rank 1 -> pos 0, rank 2 -> pos n-1, ranks 3+ fill middle
+    # Canonical lost-in-the-middle: alternate placing highest remaining items at the ends,
+    # leaving the least relevant items in the center.
     reordered = [None] * n
-    
-    # Place rank 1 (most relevant) at beginning
-    reordered[0] = ranked_chunk_ids[0]
-    
-    # Place rank 2 (second most relevant) at end
-    reordered[n - 1] = ranked_chunk_ids[1]
-    
-    # Fill middle positions with remaining ranks in order
-    middle_start = 1
-    for i in range(2, n):
-        reordered[middle_start] = ranked_chunk_ids[i]
-        middle_start += 1
+    left, right = 0, n - 1
+    for i, chunk_id in enumerate(ranked_chunk_ids):
+        if i % 2 == 0:
+            reordered[left] = chunk_id
+            left += 1
+        else:
+            reordered[right] = chunk_id
+            right -= 1
     
     logger.debug(f"Lost-in-middle reordering: {n} chunks reordered")
     return reordered
@@ -273,14 +270,20 @@ def build_chunk_lookup(ticker: str) -> dict[str, Chunk]:
         logger.error(f"No BM25 index found for {ticker}, cannot build chunk lookup")
         return {}
     
-    chunks = bm25_entry["chunks"]
-    chunk_lookup = {chunk.chunk_id: chunk for chunk in chunks}
+    if "chunk_lookup" not in bm25_entry:
+        bm25_entry["chunk_lookup"] = {chunk.chunk_id: chunk for chunk in bm25_entry["chunks"]}
+        logger.debug(f"Built and cached chunk lookup for {ticker}: {len(bm25_entry['chunk_lookup'])} chunks")
     
-    logger.debug(f"Built chunk lookup for {ticker}: {len(chunk_lookup)} chunks")
-    return chunk_lookup
+    return bm25_entry["chunk_lookup"]
 
 
-def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N, year: int | None = None) -> list[Chunk]:
+def hybrid_retrieve(
+    query: str, 
+    ticker: str, 
+    top_n: int = FINAL_TOP_N, 
+    year: int | None = None,
+    reorder: bool = True,
+) -> list[Chunk]:
     """
     Perform hybrid retrieval with RRF fusion, boosting, and reordering.
     
@@ -289,9 +292,11 @@ def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N, year: int
         ticker: Company ticker symbol.
         top_n: Number of final results to return.
         year: Optional year filter: restricts retrieval to chunks from this fiscal year.
+        reorder: If True, apply lost-in-the-middle reordering for LLM context windows.
+                 If False, preserve strict rank order (best for IR evaluation).
         
     Returns:
-        list[Chunk]: Final ranked and reordered chunks, length <= top_n.
+        list[Chunk]: Final ranked chunks, length <= top_n.
     """
     logger.info(f"Hybrid retrieval for '{query}' in {ticker}, requesting top {top_n}"
                 + (f", year={year}" if year else ""))
@@ -303,8 +308,11 @@ def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N, year: int
         return []
     
     # Dense and sparse search (both with optional year filter)
-    dense_results = dense_search(query, ticker, year=year)
-    sparse_results = sparse_search(query, ticker, top_k=SPARSE_TOP_K, year=year)
+    candidate_k = max(top_n * 4, 10)
+    dense_k = min(candidate_k, DENSE_TOP_K)
+    sparse_k = min(candidate_k, SPARSE_TOP_K)
+    dense_results = dense_search(query, ticker, top_k=dense_k, year=year)
+    sparse_results = sparse_search(query, ticker, top_k=sparse_k, year=year)
     
     if not dense_results and not sparse_results:
         logger.warning(f"Both dense and sparse search returned no results for '{query}' in {ticker}")
@@ -324,8 +332,8 @@ def hybrid_retrieve(query: str, ticker: str, top_n: int = FINAL_TOP_N, year: int
     top_boosted = boosted_results[:top_n]
     top_chunk_ids = [chunk_id for chunk_id, _ in top_boosted]
     
-    # Apply lost-in-middle reordering
-    reordered_chunk_ids = lost_in_middle_reorder(top_chunk_ids)
+    # Apply lost-in-middle reordering if requested
+    reordered_chunk_ids = lost_in_middle_reorder(top_chunk_ids) if reorder else top_chunk_ids
     
     # Map back to Chunk objects
     final_chunks = []

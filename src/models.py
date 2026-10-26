@@ -33,6 +33,7 @@ class CompanyCredibilityReport(BaseModel):
     delivered: int
     partial: int
     abandoned: int
+    pending: int = 0
     overall_score: float = Field(ge=0.0, le=100.0)
     domain_scores: dict[str, float]
     red_flags: list[str]

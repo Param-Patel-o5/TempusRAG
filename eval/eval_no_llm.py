@@ -34,6 +34,7 @@ from src.config import (  # noqa: E402
     RRF_K,
     recency_weight,
 )
+from src.embedder import tokenize_for_bm25  # noqa: E402
 from src.models import Chunk, CompanyCredibilityReport, DeliveryEvidence, Promise  # noqa: E402
 from src.query import detect_followup_query, should_use_hyde  # noqa: E402
 from src.retriever import (  # noqa: E402
@@ -58,12 +59,6 @@ OUT_DIR = ROOT / "eval"
 FILINGS_DIR = ROOT / "data" / "filings"
 SECTION_HEADER = re.compile(r"^=== (.+?) ===\s*$")
 SUB_HEADER = re.compile(r"^--- (.+?) ---\s*$")
-
-
-def tokenize_for_bm25(text: str) -> list[str]:
-    """Same rule as src.embedder.tokenize_for_bm25 — copied so this eval does not load Chroma/ST."""
-    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
-    return [token for token in cleaned.split() if token.strip()]
 
 
 def parse_cached_filing(text: str) -> dict[str, dict[str, str]]:
@@ -245,7 +240,7 @@ def eval_retriever() -> tuple[list[dict], dict]:
 
     ids = ["A", "B", "C", "D", "E"]
     reordered = lost_in_middle_reorder(ids)
-    expected_lim = ["A", "C", "D", "E", "B"]
+    expected_lim = ["A", "C", "E", "D", "B"]
     checks.append(check("lost_in_middle", reordered == expected_lim, f"got {reordered}"))
 
     tokens = tokenize_for_bm25("We are investing in digital transformation!")

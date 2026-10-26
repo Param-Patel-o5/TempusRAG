@@ -31,15 +31,6 @@ from bs4 import BeautifulSoup
 
 from src.config import DATA_DIR, PROJECT_ROOT, SEC_MIN_REQUEST_INTERVAL, SEC_USER_AGENT
 
-try:
-    import pymupdf
-    PYMUPDF_AVAILABLE = True
-except ImportError:
-    try:
-        import fitz as pymupdf  # legacy alias
-        PYMUPDF_AVAILABLE = True
-    except ImportError:
-        PYMUPDF_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -633,10 +624,11 @@ def ingest_company(ticker: str, cik_map: dict[str, str], data_dir: str | Path = 
 
     Years that fail are left out of the result and recorded in LAST_FAILURES.
     """
+    global LAST_FAILURES
+    LAST_FAILURES = {}
     ticker = ticker.upper()
     output_dir = Path(data_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    LAST_FAILURES.clear()
 
     try:
         filings = get_recent_10k_filings(ticker, cik_map, count=5)

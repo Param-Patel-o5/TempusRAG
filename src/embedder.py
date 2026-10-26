@@ -260,6 +260,7 @@ def embed_and_store_chunks(
     ticker: str,
     years_covered: list[int] | None = None,
     api_key: str | None = None,
+    _rebuild_bm25: bool = True,
 ) -> None:
     """Embed chunks and store in ChromaDB, one fiscal year at a time.
 
@@ -272,6 +273,8 @@ def embed_and_store_chunks(
         years_covered: Kept for backward compatibility. Actual years are derived
             directly from chunks.
         api_key: Kept for signature compatibility (not needed for local model).
+        _rebuild_bm25: If True (default), invalidates the BM25 cache after storing
+            so it is rebuilt lazily from the full collection on next retrieval.
     """
     if not chunks:
         logger.warning(f"Empty chunks list provided for {ticker}, skipping embedding")
@@ -346,7 +349,8 @@ def embed_and_store_chunks(
     collection.modify(metadata=updated_meta)
 
     # Invalidate BM25 cache so it is rebuilt lazily from the full collection
-    _bm25_indices.pop(ticker_upper, None)
+    if _rebuild_bm25:
+        _bm25_indices.pop(ticker_upper, None)
 
     elapsed_time = time.time() - start_time
     logger.info(
@@ -435,36 +439,6 @@ def get_chroma_collection(ticker: str):
         logger.error(f"Failed to get ChromaDB collection {collection_name}: {e}")
         raise
 
-
-class FakeEmbeddingWrapper:
-    """Deterministic, offline fake embedder producing unit-normalized vectors for tests."""
-
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key
-
-    def _embed_single(self, text: str) -> np.ndarray:
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        seed = int.from_bytes(h[:4], "big")
-        rng = np.random.default_rng(seed)
-        vec = rng.standard_normal(EMBEDDING_DIMENSIONS).astype(np.float32)
-        norm = np.linalg.norm(vec)
-        return vec / (norm if norm > 0 else 1.0)
-
-    def encode_documents(self, texts: list[str], batch_size: int = DEFAULT_EMBED_BATCH_SIZE) -> np.ndarray:
-        return np.array([self._embed_single(t) for t in texts], dtype=np.float32)
-
-    def encode_query(self, query: str) -> np.ndarray:
-        return self._embed_single(query)
-
-    def encode(
-        self,
-        texts: list[str] | str,
-        show_progress_bar: bool = False,
-        batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
-    ) -> np.ndarray:
-        if isinstance(texts, str):
-            return self.encode_query(texts)
-        return self.encode_documents(texts, batch_size=batch_size)
 
 
 def _run_tests() -> None:

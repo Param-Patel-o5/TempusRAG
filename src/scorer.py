@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 VALID_DOMAINS = {"Technology", "Claims", "Growth", "Finance", "Operations"}
 
 
+# Signal 2 metric pattern: detect real quantitative targets.
+_METRIC_RE = re.compile(
+    r'\d+\s*%'                          # percentage: 40%, 12.5 %
+    r'|\$\s*\d'                          # dollar amount: $2B, $100M
+    r'|\d+\s*x\b'                        # multiplier: 3x, 2x
+    r'|\d+\s*(?:million|billion|bn|M\b|B\b)'  # large units
+    r'|\d+\s*(?:basis points?|bps?)'     # financial: 50 bps
+    r'|\d+\s*(?:days?|months?|quarters?)' # time-bound metric: 30 days
+    r'|\b\d{2,}\s*(?:employees?|customers?|stores?|locations?)',  # scale: 500 employees
+    re.IGNORECASE,
+)
+
+
 def compute_confidence_score(promise: Promise) -> float:
     """
     Compute confidence score for a promise using rule-based signals.
@@ -36,19 +49,6 @@ def compute_confidence_score(promise: Promise) -> float:
         signals_matched.append("has_deadline")
     
     # Signal 2: has_metric (0.3 weight): detect real quantitative targets.
-    # Requires at least one of: percentage, dollar/unit amount, multiplier, or
-    # a standalone number with a business unit (million, billion, basis points, days).
-    # Intentionally skips bare years like "2024" which are deadlines, not metrics.
-    _METRIC_RE = re.compile(
-        r'\d+\s*%'                          # percentage: 40%, 12.5 %
-        r'|\$\s*\d'                          # dollar amount: $2B, $100M
-        r'|\d+\s*x\b'                        # multiplier: 3x, 2x
-        r'|\d+\s*(?:million|billion|bn|M\b|B\b)'  # large units
-        r'|\d+\s*(?:basis points?|bps?)'     # financial: 50 bps
-        r'|\d+\s*(?:days?|months?|quarters?)' # time-bound metric: 30 days
-        r'|\b\d{2,}\s*(?:employees?|customers?|stores?|locations?)',  # scale: 500 employees
-        re.IGNORECASE,
-    )
     if _METRIC_RE.search(promise.promise_text):
         score += CONFIDENCE_SIGNAL_WEIGHTS["has_metric"]
         signals_matched.append("has_metric")
@@ -233,13 +233,18 @@ def compute_overall_credibility_score(delivery_evidence: list[DeliveryEvidence])
     return final_score
 
 
-def detect_red_flags(delivery_evidence: list[DeliveryEvidence], domain_scores: dict[str, float]) -> list[str]:
+def detect_red_flags(
+    delivery_evidence: list[DeliveryEvidence],
+    domain_scores: dict[str, float],
+    status_counts: dict[str, int] | None = None,
+) -> list[str]:
     """
     Detect red flags in company promise delivery performance.
     
     Args:
         delivery_evidence: List of delivery evidence objects
         domain_scores: Average scores by domain
+        status_counts: Precomputed status counts (optional)
         
     Returns:
         list[str]: List of red flag messages
@@ -250,7 +255,8 @@ def detect_red_flags(delivery_evidence: list[DeliveryEvidence], domain_scores: d
         return red_flags
     
     # Count statuses for percentage calculations
-    status_counts = count_delivery_statuses(delivery_evidence)
+    if status_counts is None:
+        status_counts = count_delivery_statuses(delivery_evidence)
     total_evidence = len(delivery_evidence)
     
     # Red flag 1: More than 50% "Silently Abandoned"
@@ -327,7 +333,7 @@ def generate_credibility_report(company_ticker: str, company_display_name: str,
     status_counts = count_delivery_statuses(delivery_evidence)
     domain_scores = compute_domain_scores(delivery_evidence)
     overall_score = compute_overall_credibility_score(delivery_evidence)
-    red_flags = detect_red_flags(delivery_evidence, domain_scores)
+    red_flags = detect_red_flags(delivery_evidence, domain_scores, status_counts=status_counts)
     
     # Construct final report
     report = CompanyCredibilityReport(
@@ -337,6 +343,7 @@ def generate_credibility_report(company_ticker: str, company_display_name: str,
         delivered=status_counts["Delivered"],
         partial=status_counts["Partial"],
         abandoned=status_counts["Silently Abandoned"],
+        pending=status_counts["Pending"],
         overall_score=overall_score,
         domain_scores=domain_scores,
         red_flags=red_flags

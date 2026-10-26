@@ -168,22 +168,6 @@ def chunk_subsection_text(
         current_chunk_sentences.append(sentence)
         current_token_count += sentence_tokens
 
-        # Handle oversized single sentence:
-        # Note: Sentences exceeding max_tokens are already hard-split in the
-        # expansion loop above. This check is retained as a defense-in-depth
-        # safeguard in case unexpanded text reaches this point.
-        if len(current_chunk_sentences) == 1 and sentence_tokens > max_tokens:
-            logger.warning(
-                f"Single sentence exceeds max_tokens ({sentence_tokens} > {max_tokens}), "
-                f"keeping as standalone chunk: '{sentence[:100]}...'"
-            )
-            chunk_text = sentence
-            chunks.append(chunk_text)
-
-            # Reset for next chunk
-            current_chunk_sentences = []
-            current_token_count = 0
-
         i += 1
 
     # Add final chunk if any sentences remain
@@ -213,6 +197,28 @@ def build_contextual_prefix(company: str, year: int, section: str, subsection: s
         return f"[{company} | {year} | {section} > {subsection}]"
 
 
+def abbreviate_name(name: str) -> str:
+    """Convert name to short uppercase alphanumeric token."""
+    clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', name)
+    words = clean_name.split()
+
+    if not words:
+        return "UNK"
+
+    abbreviated = []
+    for word in words:
+        if len(word) >= 3:
+            abbreviated.append(word[:4].upper())
+        elif len(word) > 0:
+            abbreviated.append(word.upper())
+
+    result = '_'.join(abbreviated)
+    if len(result) > 12:
+        result = result[:12]
+
+    return result if result else "UNK"
+
+
 def make_chunk_id(company_ticker: str, year: int, section: str, subsection: str, index: int) -> str:
     """Generate deterministic chunk ID.
 
@@ -226,27 +232,6 @@ def make_chunk_id(company_ticker: str, year: int, section: str, subsection: str,
     Returns:
         Chunk ID like "HIG_2021_MDA_TECH_07_A1B2C3".
     """
-    def abbreviate_name(name: str) -> str:
-        """Convert name to short uppercase alphanumeric token."""
-        clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', name)
-        words = clean_name.split()
-
-        if not words:
-            return "UNK"
-
-        abbreviated = []
-        for word in words:
-            if len(word) >= 3:
-                abbreviated.append(word[:4].upper())
-            elif len(word) > 0:
-                abbreviated.append(word.upper())
-
-        result = '_'.join(abbreviated)
-        if len(result) > 12:
-            result = result[:12]
-
-        return result if result else "UNK"
-
     section_abbrev = abbreviate_name(section)
     subsection_abbrev = abbreviate_name(subsection) if subsection != "full_text" else ""
 
@@ -317,7 +302,7 @@ def chunk_year_sections(
                     company_display_name, year, section_name, subsection_name
                 )
                 prefixed_text = f"{prefix} {chunk_text}"
-                word_count = len(prefixed_text.split())
+                word_count = len(chunk_text.split())
 
                 chunk_id = make_chunk_id(
                     company_ticker, year, section_name, subsection_name, chunk_index

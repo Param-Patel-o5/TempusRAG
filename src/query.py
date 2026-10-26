@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from google import genai
 
-from src.config import EXTRACTOR_MODEL, GEMINI_API_KEY
+from src.config import EXTRACTOR_MODEL, EXTRACTOR_FALLBACK_MODEL, GEMINI_API_KEY
 from src.models import Chunk
+from src.rate_limit import get_rate_limiter
 from src.retriever import hybrid_retrieve
 
 logger = logging.getLogger(__name__)
@@ -22,35 +25,58 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("google.auth").setLevel(logging.WARNING)
 
 
+# ============================================================================
+# GEMINI CLIENT SINGLETON  (Change 12 / 13)
+# ============================================================================
+
+_query_gemini_client = None
+_query_gemini_client_lock = threading.Lock()
+_query_gemini_client_key = None
+
+
+def _get_query_gemini_client(api_key: str):
+    """Singleton Gemini client for query operations (avoids TLS per-call overhead)."""
+    global _query_gemini_client, _query_gemini_client_key
+    if _query_gemini_client is not None and _query_gemini_client_key == api_key:
+        return _query_gemini_client
+    with _query_gemini_client_lock:
+        if _query_gemini_client is None or _query_gemini_client_key != api_key:
+            _query_gemini_client = genai.Client(api_key=api_key)
+            _query_gemini_client_key = api_key
+    return _query_gemini_client
+
+
 def _gemini_call(prompt: str, api_key: str) -> str:
-    """Single Gemini call: fresh client per request, no global state."""
-    import src.config as cfg
-    model = getattr(cfg, "EXTRACTOR_MODEL", "gemini-3.5-flash")
-    fallback = getattr(cfg, "EXTRACTOR_FALLBACK_MODEL", "gemini-3.5-flash-lite")
-    client = genai.Client(api_key=api_key)
-    try:
+    """Single Gemini call with singleton client and rate limiting.  (Change 13)
+
+    Uses the shared gemini_generate limiter for consistent rate limiting.
+    Model order: primary=EXTRACTOR_MODEL (flash-lite, 15 RPM), fallback=EXTRACTOR_FALLBACK_MODEL.
+    """
+    model = EXTRACTOR_MODEL
+    fallback = EXTRACTOR_FALLBACK_MODEL
+    client = _get_query_gemini_client(api_key)
+    limiter = get_rate_limiter("gemini_generate")
+
+    def _invoke(model_name: str) -> str:
         response = client.models.generate_content(
-            model=model,
+            model=model_name,
             contents=prompt,
             config={"temperature": 0.3, "max_output_tokens": 2048},
         )
+        if not response.candidates:
+            raise RuntimeError("Gemini returned no candidates")
+        text = response.text
+        if text is None:
+            raise RuntimeError("Gemini returned a candidate with no text")
+        return text
+
+    try:
+        return limiter.execute_with_retry(lambda: _invoke(model))
     except Exception as e:
         if fallback and fallback != model:
             logger.warning("Primary query model %r failed (%s); trying %r", model, e, fallback)
-            response = client.models.generate_content(
-                model=fallback,
-                contents=prompt,
-                config={"temperature": 0.3, "max_output_tokens": 2048},
-            )
-        else:
-            raise
-
-    if not response.candidates:
-        raise RuntimeError("Gemini returned no candidates")
-    text = response.text
-    if text is None:
-        raise RuntimeError("Gemini returned a candidate with no text")
-    return text
+            return limiter.execute_with_retry(lambda: _invoke(fallback))
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +89,11 @@ def detect_followup_query(
 ) -> bool:
     """Return True if the query looks like a follow-up needing prior context."""
     q = query.lower().strip()
-    followup_indicators = [
-        "it", "that", "this", "they", "them", "those", "these",
-        "what about", "how about", "and that", "regarding that",
-        "about it", "for that", "with that", "from that",
+    followup_patterns = [
+        r"\b(it|that|this|they|them|those|these)\b",
+        r"\b(what about|how about|and that|regarding that|about it|for that|with that|from that)\b",
     ]
-    has_pronouns = any(ind in q for ind in followup_indicators)
+    has_pronouns = any(bool(re.search(pat, q)) for pat in followup_patterns)
     starts_bare = bool(re.match(r"^(what|how|when|where|why|which)\s*\?*$", q))
     very_short = len(query.split()) <= 3
     lacks_specifics = not re.search(
@@ -225,17 +250,21 @@ def process_query(
     logger.info("Processing query %r for %s", query, ticker)
 
     is_followup = detect_followup_query(query, conversation_history)
-    rewritten = rewrite_query(query, conversation_history, api_key) if is_followup else query
+    need_hyde = should_use_hyde(query) if use_hyde is None else use_hyde
 
-    if use_hyde is None:
-        use_hyde = should_use_hyde(rewritten)
+    if is_followup and need_hyde:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fut_rewrite = executor.submit(rewrite_query, query, conversation_history, api_key)
+            fut_hyde = executor.submit(generate_hypothetical_answer, query, api_key)
+            rewritten = fut_rewrite.result()
+            hypothetical = fut_hyde.result()
+        use_hyde = True
+    else:
+        rewritten = rewrite_query(query, conversation_history, api_key) if is_followup else query
+        use_hyde = should_use_hyde(rewritten) if use_hyde is None else use_hyde
+        hypothetical = generate_hypothetical_answer(rewritten, api_key) if use_hyde else ""
 
-    hypothetical = ""
-    retrieval_query = rewritten
-    if use_hyde:
-        hypothetical = generate_hypothetical_answer(rewritten, api_key)
-        if hypothetical:
-            retrieval_query = f"{rewritten} {hypothetical}"
+    retrieval_query = f"{rewritten} {hypothetical}".strip() if (use_hyde and hypothetical) else rewritten
 
     try:
         chunks = hybrid_retrieve(retrieval_query, ticker, top_n=top_n)

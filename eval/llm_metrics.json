@@ -1,27 +1,28 @@
 {
-  "generated_at": "2026-09-10T18:25:52Z",
+  "generated_at": "2026-10-26T23:42:24Z",
   "gold_meta": {
-    "issuer": "HIG",
-    "issuer_name": "The Hartford",
-    "created_at": "2026-09-10T18:07:07Z",
-    "source": "Cached SEC 10-K plaintext in data/filings/HIG_YYYY.txt (EDGAR HTML parse, whitespace-normalized).",
-    "n_extract": 20,
-    "n_judge": 15,
+    "issuers": [
+      "HIG",
+      "TSLA",
+      "NVDA"
+    ],
+    "created_at": "2026-09-26T17:17:16Z",
+    "source": "Cached SEC 10-K filings across HIG, TSLA, and NVDA.",
+    "n_extract": 28,
+    "n_judge": 18,
     "n_qa": 10,
-    "n_extract_none": 7,
-    "n_extract_with_deadline": 8,
-    "caveat": "Hand-labeled from excerpts; HIG only; not a statistically powered eval."
+    "caveat": "Expanded multi-company benchmark dataset for TempusRAG."
   },
   "extract": {
-    "n": 20,
-    "n_scored": 15,
+    "n": 28,
+    "n_scored": 23,
     "skipped_quota": 5,
-    "json_parse_success_rate": 1.0,
+    "json_parse_success_rate": 0.6521739130434783,
     "promise_precision": 1.0,
-    "promise_recall": 1.0,
+    "promise_recall": 0.6,
     "tp": 12,
     "fp": 0,
-    "fn": 0,
+    "fn": 8,
     "tn": 3,
     "domain_accuracy": 0.9167,
     "deadline_accuracy": 0.8333,
@@ -170,18 +171,137 @@
         "json_parse_ok": null,
         "n_pred": 0,
         "skipped": "quota"
+      },
+      {
+        "id": "E_TSLA_01",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_TSLA_02",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_TSLA_03",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_TSLA_04",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_TSLA_05",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_NVDA_01",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_NVDA_02",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
+      },
+      {
+        "id": "E_NVDA_03",
+        "gold_has_promise": true,
+        "pred_has_promise": false,
+        "json_parse_ok": false,
+        "n_pred": 0
       }
     ]
   },
   "judge": {
-    "n": 15,
-    "json_parse_success_rate": 1.0,
-    "exact_status_match_pct": 53.3,
-    "near_agreement_pct": 80.0,
+    "n": 18,
+    "json_parse_success_rate": 0.8333333333333334,
+    "exact_status_match_pct": 44.4,
+    "near_agreement_pct": 66.7,
+    "macro_f1": 0.4437,
+    "weighted_f1": 0.4929,
+    "cohens_kappa": 0.2885,
     "adjacent_errors": 4,
-    "far_errors": 3,
+    "far_errors": 6,
     "score_band_accuracy": 0.8667,
-    "headline": "Judge status agreement 8/15 (53.3%) on HIG pairs; LLM-as-judge, N=15, HIG only.",
+    "per_class": {
+      "Delivered": {
+        "precision": 0.4286,
+        "recall": 1.0,
+        "f1": 0.6,
+        "support": 5
+      },
+      "Partial": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "support": 3
+      },
+      "Pending": {
+        "precision": 0.5,
+        "recall": 0.2,
+        "f1": 0.2857,
+        "support": 5
+      },
+      "Silently Abandoned": {
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.8889,
+        "support": 5
+      }
+    },
+    "confusion_matrix": {
+      "labels": [
+        "Delivered",
+        "Partial",
+        "Pending",
+        "Silently Abandoned"
+      ],
+      "matrix": [
+        [
+          3,
+          0,
+          0,
+          0
+        ],
+        [
+          2,
+          0,
+          0,
+          0
+        ],
+        [
+          2,
+          2,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          4
+        ]
+      ]
+    },
+    "headline": "Judge status agreement 8/18 (44.4%), Macro-F1=0.44, Kappa=0.29; LLM-as-judge, N=18.",
     "rows": [
       {
         "id": "J01",
@@ -332,9 +452,39 @@
         "gold_score_band": "31-60",
         "band_match": true,
         "json_parse_ok": true
+      },
+      {
+        "id": "J_TSLA_01",
+        "gold_status": "Delivered",
+        "pred_status": null,
+        "match": "far",
+        "delivery_score": null,
+        "gold_score_band": "86-100",
+        "band_match": null,
+        "json_parse_ok": false
+      },
+      {
+        "id": "J_TSLA_02",
+        "gold_status": "Partial",
+        "pred_status": null,
+        "match": "far",
+        "delivery_score": null,
+        "gold_score_band": "61-85",
+        "band_match": null,
+        "json_parse_ok": false
+      },
+      {
+        "id": "J_NVDA_01",
+        "gold_status": "Delivered",
+        "pred_status": null,
+        "match": "far",
+        "delivery_score": null,
+        "gold_score_band": "86-100",
+        "band_match": null,
+        "json_parse_ok": false
       }
     ]
   },
-  "headline": "Judge status agreement 8/15 (53.3%) on HIG pairs; LLM-as-judge, N=15, HIG only.",
+  "headline": "Judge status agreement 8/18 (44.4%), Macro-F1=0.44, Kappa=0.29; LLM-as-judge, N=18.",
   "caveat": "LLM-as-judge, N=15, HIG only. Do not treat overall 0\u2013100 credibility as ground truth."
 }
