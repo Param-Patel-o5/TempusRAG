@@ -1,16 +1,16 @@
 # TempusRAG — no-LLM metrics
 
-Generated `2026-10-26T23:48:40Z`. No Gemini/Groq/EDGAR calls.
+Generated `2026-10-27T00:34:18Z`. No Gemini/Groq/EDGAR calls.
 
-**Checks:** 94/94 passed.
+**Checks:** 109/109 passed.
 
 ## System (cached 10-Ks on disk)
 
-- Filings: **15**
-- Tickers: HIG, NVDA, TSLA
-- Chunks after local chunker: **2899**
+- Filings: **20**
+- Tickers: HIG, LPLA, NVDA, TSLA
+- Chunks after local chunker: **3689**
 - Chunk token cap (word-split proxy): 500
-- Mean chunk words: **444.8**
+- Mean chunk words: **443.3**
 - Max chunk words: **500**
 - Chunks over soft cap (cap+80): 0 (0.0%)
 
@@ -18,7 +18,7 @@ Generated `2026-10-26T23:48:40Z`. No Gemini/Groq/EDGAR calls.
 
 **Schemas, RRF, section boost, lost-in-middle, and scorer math are solid** — they match the locked contracts and are safe to cite as no-LLM correctness.
 
-**Chunker is mixed.** Mean chunk size (444.8 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.
+**Chunker is mixed.** Mean chunk size (443.3 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.
 
 **Cached 10-K parse is coarse** (Item-level sections, few true subsections). Fine for indexing, weak for MD&A-only promise targeting until HTML heading parse improves.
 
@@ -31,6 +31,11 @@ HyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM
 | HIG_2023.txt | 12 | 305 | 475.1 | 500 |
 | HIG_2024.txt | 12 | 292 | 477.0 | 500 |
 | HIG_2025.txt | 12 | 290 | 475.2 | 500 |
+| LPLA_2021.txt | 21 | 151 | 436.6 | 500 |
+| LPLA_2022.txt | 22 | 148 | 432.5 | 500 |
+| LPLA_2023.txt | 23 | 157 | 438.0 | 500 |
+| LPLA_2024.txt | 23 | 164 | 444.6 | 500 |
+| LPLA_2025.txt | 23 | 170 | 443 | 500 |
 | NVDA_2022.txt | 22 | 116 | 419.5 | 500 |
 | NVDA_2023.txt | 22 | 121 | 420.7 | 500 |
 | NVDA_2024.txt | 23 | 128 | 423.7 | 500 |
@@ -57,5 +62,5 @@ HyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM
 ## README snippet
 
 ```
-No-LLM eval (2026-10-26): 94/94 checks; 15 cached 10-Ks → 2899 chunks; RRF + section boost + lost-in-middle unit-checked; scorer fixture overall 85/100.
+No-LLM eval (2026-10-27): 109/109 checks; 20 cached 10-Ks → 3689 chunks; RRF + section boost + lost-in-middle unit-checked; scorer fixture overall 85/100.
 ```

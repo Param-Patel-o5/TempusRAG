@@ -412,7 +412,7 @@ def judge_single_promise(
 def batch_judge_promises(
     promises: list,
     ticker: str,
-    evidence_years: list,
+    available_years: list,
     api_key = None,
 ) -> list:
     """Judge all promises concurrently with deduplication and dynamic retrieval.

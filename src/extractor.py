@@ -66,17 +66,16 @@ def _get_gemini_client(api_key: str):
 # CHUNK SELECTION CONSTANTS
 # ============================================================================
 
-TARGET_PROMISE_WORDS = 5000
-MAX_PROMISE_CHUNKS = max(5, TARGET_PROMISE_WORDS // max(1, CHUNK_MAX_TOKENS))
+TARGET_PROMISE_WORDS = 10000
+MAX_PROMISE_CHUNKS = max(10, TARGET_PROMISE_WORDS // max(1, CHUNK_MAX_TOKENS))
 MIN_SECTION_WORDS = TARGET_PROMISE_WORDS // 2
-MIN_CUE_HITS = 3
+MIN_CUE_HITS = 2
 
 # Sections that never hold commitments — applied only to cue-phrase fallback candidates
 _EXCLUDED_SECTION_KEYWORDS = (
     "risk factor",
     "legal proceeding",
     "controls and procedures",
-    "cybersecurity",
     "signature",
     "properties",
     "mine safety",
@@ -97,9 +96,6 @@ _CUE_RE = re.compile(
     r"|\bover the next (?:\w+ ){0,2}(?:years?|months?|quarters?)\b",
     re.IGNORECASE,
 )
-
-_SAFE_HARBOR_MARKER = "private securities litigation reform act"
-
 
 def _cue_count(text: str) -> int:
     return len(_CUE_RE.findall(text))
@@ -188,18 +184,23 @@ def build_extraction_prompt(year: int, chunks: list) -> str:
         f"--- Chunk {i} ---\n{c.text}" for i, c in enumerate(chunks, 1)
     )
 
-    return f"""You are analyzing SEC 10-K filing content from fiscal year {year}.
+    return f"""You are analyzing SEC Form 10-K filing content from fiscal year {year}.
 
-TASK: Extract every forward-looking statement that indicates management's intentions,
-plans, expectations, or commitments about future business activities. Include statements
-with language like "may", "could", "intend to", "plan to", "expect to", "committed to",
-"will continue", "are working to".
+TASK: Extract every forward-looking commitment, strategic plan, operational target, or expectation made by company management about future activities.
 
-INSTRUCTIONS:
+INCLUDE STATEMENTS REGARDING:
+- Technology, Software & AI: Autonomous driving, AI/robotics, computing architectures, platform rollouts, cybersecurity upgrades.
+- Growth, Products & Production: Vehicle/hardware production ramps, new model launches, capacity expansions, customer demand goals.
+- Finance & Capital Allocation: Capital expenditures, share repurchases, dividend expectations, debt retirement.
+- Operations: M&A integration milestones, facility/branch buildouts, supply chain commitments, workforce initiatives.
+
+GUIDELINES:
 1. Extract each distinct forward-looking statement as a separate promise.
 2. Domain must be exactly one of: Technology, Claims, Growth, Finance, Operations.
-3. Capture deadline verbatim if mentioned in text, otherwise null.
-4. year_made is {year}. page_number is 0.
+3. Capture deadline verbatim if mentioned in text (e.g. "2025", "fourth quarter of 2026", "by year-end 2024"), otherwise null.
+4. Exclude purely historical descriptions of past results or accounting policies.
+5. Exclude external third-party actions (e.g. government regulator decisions or lawsuits).
+6. year_made is {year}. page_number is 0.
 
 RESPONSE FORMAT: JSON array only, no markdown fences, no preamble:
 [{{"promise_text": "...", "domain": "...", "deadline_mentioned": "..." or null, "year_made": {year}, "page_number": 0}}]

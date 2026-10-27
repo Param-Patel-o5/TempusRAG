@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-10-26T23:48:40Z",
+  "generated_at": "2026-10-27T00:34:18Z",
   "llm_calls": false,
   "summary": {
-    "passed": 94,
-    "total": 94,
+    "passed": 109,
+    "total": 109,
     "failed": 0
   },
-  "quality_read": "**Schemas, RRF, section boost, lost-in-middle, and scorer math are solid** \u2014 they match the locked contracts and are safe to cite as no-LLM correctness.\n\n**Chunker is mixed.** Mean chunk size (444.8 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.\n\n**Cached 10-K parse is coarse** (Item-level sections, few true subsections). Fine for indexing, weak for MD&A-only promise targeting until HTML heading parse improves.\n\nHyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM eval.",
+  "quality_read": "**Schemas, RRF, section boost, lost-in-middle, and scorer math are solid** \u2014 they match the locked contracts and are safe to cite as no-LLM correctness.\n\n**Chunker is mixed.** Mean chunk size (443.3 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.\n\n**Cached 10-K parse is coarse** (Item-level sections, few true subsections). Fine for indexing, weak for MD&A-only promise targeting until HTML heading parse improves.\n\nHyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM eval.",
   "models": {
     "schemas": [
       "Promise",
@@ -51,13 +51,14 @@
     "fixture_report_overall": 85.0
   },
   "filings": {
-    "cached_filings": 15,
+    "cached_filings": 20,
     "tickers": [
       "HIG",
+      "LPLA",
       "NVDA",
       "TSLA"
     ],
-    "total_chunks": 2899,
+    "total_chunks": 3689,
     "per_filing": [
       {
         "file": "HIG_2021.txt",
@@ -130,6 +131,81 @@
         "empty_subsections": 0,
         "chunk_count": 290,
         "word_count_mean": 475.2,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "LPLA_2021.txt",
+        "ticker": "LPLA",
+        "year": 2021,
+        "bytes": 420284,
+        "chars": 412441,
+        "section_count": 21,
+        "nonempty_subsections": 21,
+        "empty_subsections": 0,
+        "chunk_count": 151,
+        "word_count_mean": 436.6,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "LPLA_2022.txt",
+        "ticker": "LPLA",
+        "year": 2022,
+        "bytes": 409360,
+        "chars": 401711,
+        "section_count": 22,
+        "nonempty_subsections": 22,
+        "empty_subsections": 0,
+        "chunk_count": 148,
+        "word_count_mean": 432.5,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "LPLA_2023.txt",
+        "ticker": "LPLA",
+        "year": 2023,
+        "bytes": 442607,
+        "chars": 434452,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 157,
+        "word_count_mean": 438.0,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "LPLA_2024.txt",
+        "ticker": "LPLA",
+        "year": 2024,
+        "bytes": 469902,
+        "chars": 461194,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 164,
+        "word_count_mean": 444.6,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "LPLA_2025.txt",
+        "ticker": "LPLA",
+        "year": 2025,
+        "bytes": 485655,
+        "chars": 476678,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 170,
+        "word_count_mean": 443,
         "word_count_max": 500,
         "unique_chunk_ids": true,
         "chunks_over_soft_cap": 0
@@ -289,7 +365,7 @@
     "chunks_over_soft_cap_total": 0,
     "overflow_rate": 0.0,
     "max_chunk_words": 500,
-    "mean_chunk_words": 444.8
+    "mean_chunk_words": 443.3
   },
   "checks": [
     {
@@ -558,6 +634,81 @@
       "detail": ""
     },
     {
+      "name": "LPLA_2021.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2021.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2021.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2022.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2022.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2022.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2023.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2023.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2023.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2024.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2024.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2024.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2025.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2025.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "LPLA_2025.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
       "name": "NVDA_2022.txt_has_sections",
       "pass": true,
       "detail": ""
@@ -760,7 +911,7 @@
     {
       "name": "mean_chunk_words_under_cap",
       "pass": true,
-      "detail": "444.7733333333333"
+      "detail": "443.315"
     }
   ]
 }
