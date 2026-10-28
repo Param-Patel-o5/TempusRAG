@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-10-27T00:34:18Z",
+  "generated_at": "2026-10-27T08:44:36Z",
   "llm_calls": false,
   "summary": {
-    "passed": 109,
-    "total": 109,
+    "passed": 139,
+    "total": 139,
     "failed": 0
   },
-  "quality_read": "**Schemas, RRF, section boost, lost-in-middle, and scorer math are solid** \u2014 they match the locked contracts and are safe to cite as no-LLM correctness.\n\n**Chunker is mixed.** Mean chunk size (443.3 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.\n\n**Cached 10-K parse is coarse** (Item-level sections, few true subsections). Fine for indexing, weak for MD&A-only promise targeting until HTML heading parse improves.\n\nHyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM eval.",
+  "quality_read": "**Schemas, RRF, section boost, lost-in-middle, and scorer math are solid** \u2014 they match the locked contracts and are safe to cite as no-LLM correctness.\n\n**Chunker is mixed.** Mean chunk size (433.2 words) sits under the 500-word cap, and IDs/prefixes are consistent. But **0 chunks (0.0%) overflow**, with a max of **500 words** (long tables/sentences force-appended). That hurts embedding quality and context windows; it is a real defect, not a failed unit test.\n\n**Cached 10-K parse is coarse** (Item-level sections, few true subsections). Fine for indexing, weak for MD&A-only promise targeting until HTML heading parse improves.\n\nHyDE/follow-up heuristics are rule-based only; they are not a substitute for LLM eval.",
   "models": {
     "schemas": [
       "Promise",
@@ -51,15 +51,92 @@
     "fixture_report_overall": 85.0
   },
   "filings": {
-    "cached_filings": 20,
+    "cached_filings": 30,
     "tickers": [
+      "AAPL",
       "HIG",
       "LPLA",
+      "MSFT",
       "NVDA",
       "TSLA"
     ],
-    "total_chunks": 3689,
+    "total_chunks": 4718,
     "per_filing": [
+      {
+        "file": "AAPL_2021.txt",
+        "ticker": "AAPL",
+        "year": 2021,
+        "bytes": 224608,
+        "chars": 219620,
+        "section_count": 22,
+        "nonempty_subsections": 22,
+        "empty_subsections": 0,
+        "chunk_count": 87,
+        "word_count_mean": 402.7,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "AAPL_2022.txt",
+        "ticker": "AAPL",
+        "year": 2022,
+        "bytes": 216947,
+        "chars": 212002,
+        "section_count": 22,
+        "nonempty_subsections": 22,
+        "empty_subsections": 0,
+        "chunk_count": 84,
+        "word_count_mean": 398.2,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "AAPL_2023.txt",
+        "ticker": "AAPL",
+        "year": 2023,
+        "bytes": 200799,
+        "chars": 196370,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 80,
+        "word_count_mean": 390.0,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "AAPL_2024.txt",
+        "ticker": "AAPL",
+        "year": 2024,
+        "bytes": 204617,
+        "chars": 200144,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 78,
+        "word_count_mean": 402.1,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "AAPL_2025.txt",
+        "ticker": "AAPL",
+        "year": 2025,
+        "bytes": 207064,
+        "chars": 202515,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 79,
+        "word_count_mean": 400.7,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
       {
         "file": "HIG_2021.txt",
         "ticker": "HIG",
@@ -206,6 +283,81 @@
         "empty_subsections": 0,
         "chunk_count": 170,
         "word_count_mean": 443,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "MSFT_2022.txt",
+        "ticker": "MSFT",
+        "year": 2022,
+        "bytes": 355586,
+        "chars": 343702,
+        "section_count": 22,
+        "nonempty_subsections": 22,
+        "empty_subsections": 0,
+        "chunk_count": 128,
+        "word_count_mean": 428.0,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "MSFT_2023.txt",
+        "ticker": "MSFT",
+        "year": 2023,
+        "bytes": 349627,
+        "chars": 337809,
+        "section_count": 22,
+        "nonempty_subsections": 22,
+        "empty_subsections": 0,
+        "chunk_count": 127,
+        "word_count_mean": 423.0,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "MSFT_2024.txt",
+        "ticker": "MSFT",
+        "year": 2024,
+        "bytes": 367353,
+        "chars": 355135,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 130,
+        "word_count_mean": 431.4,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "MSFT_2025.txt",
+        "ticker": "MSFT",
+        "year": 2025,
+        "bytes": 325304,
+        "chars": 313796,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 117,
+        "word_count_mean": 424.6,
+        "word_count_max": 500,
+        "unique_chunk_ids": true,
+        "chunks_over_soft_cap": 0
+      },
+      {
+        "file": "MSFT_2026.txt",
+        "ticker": "MSFT",
+        "year": 2026,
+        "bytes": 335781,
+        "chars": 324049,
+        "section_count": 23,
+        "nonempty_subsections": 23,
+        "empty_subsections": 0,
+        "chunk_count": 119,
+        "word_count_mean": 428.0,
         "word_count_max": 500,
         "unique_chunk_ids": true,
         "chunks_over_soft_cap": 0
@@ -365,7 +517,7 @@
     "chunks_over_soft_cap_total": 0,
     "overflow_rate": 0.0,
     "max_chunk_words": 500,
-    "mean_chunk_words": 443.3
+    "mean_chunk_words": 433.2
   },
   "checks": [
     {
@@ -559,6 +711,81 @@
       "detail": "['The U.S. market is strong.', 'Inc. profits are up!', 'What will happen next?']"
     },
     {
+      "name": "AAPL_2021.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2021.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2021.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2022.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2022.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2022.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2023.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2023.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2023.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2024.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2024.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2024.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2025.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2025.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "AAPL_2025.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
       "name": "HIG_2021.txt_has_sections",
       "pass": true,
       "detail": ""
@@ -705,6 +932,81 @@
     },
     {
       "name": "LPLA_2025.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2022.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2022.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2022.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2023.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2023.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2023.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2024.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2024.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2024.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2025.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2025.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2025.txt_prefixed_chunks",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2026.txt_has_sections",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2026.txt_unique_ids",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "MSFT_2026.txt_prefixed_chunks",
       "pass": true,
       "detail": ""
     },
@@ -911,7 +1213,7 @@
     {
       "name": "mean_chunk_words_under_cap",
       "pass": true,
-      "detail": "443.315"
+      "detail": "433.1666666666667"
     }
   ]
 }

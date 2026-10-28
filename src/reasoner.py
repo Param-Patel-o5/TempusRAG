@@ -53,8 +53,11 @@ JUDGE_SYSTEM_PROMPT = (
     "Keys: status (Delivered|Partial|Pending|Silently Abandoned), "
     "score (0-100), reasoning (max 1 sentence).\n"
     "Rules: judge only from evidence provided, not prior knowledge.\n"
-    "Scoring: 90-100 explicit delivery with metrics; 70-89 confirmed progress; "
-    "50-69 topic mentioned no confirmation; 30-49 shortfall shown; 0-29 no evidence."
+    "Status Definitions:\n"
+    "- Delivered: The specific target, number, or milestone was 100% completed or reached (Score: 86-100).\n"
+    "- Partial: Substantial progress was made (e.g. partial dollar amounts spent, partial locations opened, target delayed, or launched with reduced scope) but fell short of 100% completion (Score: 31-75).\n"
+    "- Pending: Target deadline is in the future relative to the evidence year and initiative is ongoing with no shortfall reported (Score: 60-85).\n"
+    "- Silently Abandoned: Target deadline has passed or initiative vanished from subsequent filings with zero confirmation or explanation (Score: 0-30)."
 )
 
 VALID_STATUSES = {"Delivered", "Partial", "Pending", "Silently Abandoned"}

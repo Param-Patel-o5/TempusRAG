@@ -129,15 +129,17 @@ def sparse_search(query: str, ticker: str, top_k: int = SPARSE_TOP_K, year: int 
 def reciprocal_rank_fusion(
     dense_results: list[tuple[str, float]], 
     sparse_results: list[tuple[str, float]], 
-    k: int = RRF_K
+    k: int = RRF_K,
+    sparse_weight: float = 1.0
 ) -> list[tuple[str, float]]:
     """
-    Fuse dense and sparse results using Reciprocal Rank Fusion.
+    Fuse dense and sparse results using Weighted Reciprocal Rank Fusion.
     
     Args:
         dense_results: Results from dense search (chunk_id, score).
         sparse_results: Results from sparse search (chunk_id, score).
-        k: RRF parameter (typically 60).
+        k: RRF parameter (tuned to 30 for financial 10-Ks).
+        sparse_weight: Multiplier for sparse BM25 hits (1.5).
         
     Returns:
         list[tuple[str, float]]: Fused results (chunk_id, fused_score), ranked best-first.
@@ -155,9 +157,9 @@ def reciprocal_rank_fusion(
         dense_rank = dense_ranks.get(chunk_id, float('inf'))
         sparse_rank = sparse_ranks.get(chunk_id, float('inf'))
         
-        # RRF formula: 1/(k + rank)
+        # Weighted RRF formula: dense_score + sparse_weight * sparse_score
         dense_score = 1.0 / (k + dense_rank) if dense_rank != float('inf') else 0.0
-        sparse_score = 1.0 / (k + sparse_rank) if sparse_rank != float('inf') else 0.0
+        sparse_score = (1.0 / (k + sparse_rank)) * sparse_weight if sparse_rank != float('inf') else 0.0
         
         fused_score = dense_score + sparse_score
         fused_results.append((chunk_id, fused_score))
@@ -318,8 +320,8 @@ def hybrid_retrieve(
         logger.warning(f"Both dense and sparse search returned no results for '{query}' in {ticker}")
         return []
     
-    # Reciprocal Rank Fusion
-    fused_results = reciprocal_rank_fusion(dense_results, sparse_results)
+    # Reciprocal Rank Fusion (tuned with k=30 and sparse_weight=1.5 for financial filings)
+    fused_results = reciprocal_rank_fusion(dense_results, sparse_results, k=30, sparse_weight=1.5)
     
     if not fused_results:
         logger.warning(f"RRF fusion resulted in no results for '{query}' in {ticker}")
