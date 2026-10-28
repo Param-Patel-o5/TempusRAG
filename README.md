@@ -296,7 +296,8 @@ TempusRag/
 │   ├── llm_metrics.json        # Latest LLM evaluation results
 │   ├── retrieval_metrics.json  # Latest IR benchmark results
 │   ├── METRICS.md              # Auto-generated metrics ledger across 30 filings and 3,928 chunks
-│   └── EVAL_SUMMARY.md         # Comprehensive interview defense reference
+│   ├── EVAL_SUMMARY.md         # Comprehensive interview defense reference
+│   └── EVALUATION.md           # Stage-by-stage evaluation guide, explanations & benchmark numbers
 └── data/
     ├── filings/                # Cleaned, parsed 10-K sections by ticker and fiscal year
     └── raw/                    # Raw HTML filings downloaded from SEC EDGAR
@@ -308,7 +309,8 @@ TempusRag/
 
 | Document | Contents |
 |---|---|
-| [EVAL_SUMMARY.md](eval/EVAL_SUMMARY.md) | Comprehensive multi-stage evaluation benchmark, confusion matrix analysis, and interview defense cheat sheet |
+| [EVALUATION.md](eval/EVALUATION.md) | **Definitive stage-by-stage guide:** What is checked at each stage, why it matters, and our empirical numbers |
+| [EVAL_SUMMARY.md](eval/EVAL_SUMMARY.md) | Multi-stage evaluation benchmark, confusion matrix analysis, and interview defense cheat sheet |
 | [METRICS.md](eval/METRICS.md) | Auto-generated deterministic metrics ledger over 30 cached 10-Ks and 3,928 chunks |
 | [retrieval_metrics.json](eval/retrieval_metrics.json) | Raw IR evaluation output: MRR, Recall@1/3/5, and NDCG@3 |
 | [llm_metrics.json](eval/llm_metrics.json) | Raw LLM Judge evaluation output: Macro-F1, Cohen's Kappa, per-class metrics |
